@@ -1042,7 +1042,7 @@ static void play_midi(void)
 	snd_seq_event_t ev, ev_direct;
 	//int backup_verbosity = verbosity;
 	int i, err;
-	char ch;
+	int ch;
 	int old_ev_tick = 0;
 	struct track *track, *longest_track;
 	struct event *event = NULL;
