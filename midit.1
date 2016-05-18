@@ -1,0 +1,91 @@
+.TH MIDIT 1 "29 Dec 2009"
+
+.SH NAME
+midit \- play Standard MIDI Files
+
+.SH SYNOPSIS
+.B midit
+\-p client:port[,...] midifile [...]
+
+.SH DESCRIPTION
+.B midit
+is a command-line utility that plays the specified MIDI file(s) to one
+or more ALSA sequencer ports. It is derived from
+.B aplaymidi(1)
+and is capable of pausing, accelerating and slowing down tempo, seeking
+backwards and forwards, displaying information such as position in track
+in ticks or in 'minutes:seconds' format. It can also display the midi events
+being read.
+
+.SH OPTIONS
+
+.TP
+.I \-h, \-\-help
+Prints a list of options.
+
+.TP
+.I \-V, \-\-version
+Prints the current version.
+
+.TP
+.I \-l, \-\-list
+Prints a list of possible output ports.
+
+.TP
+.I \-p, \-\-port=client:port,...
+Sets the sequencer port(s) to which the events in the MIDI file(s) are
+sent.
+
+A client can be specified by its number, its name, or a prefix of its
+name. A port is specified by its number; for port 0 of a client, the
+":0" part of the port specification can be omitted.
+
+For compatibility with
+.B pmidi(1),
+the port specification is taken from the
+.I ALSA_OUTPUT_PORTS
+environment variable if none is given on the command line.
+
+.TP
+.I \-d, \-\-delay=seconds
+Specifies how long to wait after the end of each MIDI file,
+to allow the last notes to die away.
+
+.TP
+.I \-T, \-\-tempo=tempo_percentage
+Specifies the percentage of the playback tempo in respect to original tempo.
+
+.TP
+.I \-s, \-\-seek=ticks
+Starts playback at the number of ticks specified. (only for the first file)
+
+.TP
+.I \-v, \-\-verbosity=[0-10]
+Specifies the verbosity on a scale from zero to ten. Default is two.
+
+.SH INTERACTIVE CONTROL
+.PD 0
+.IP "space"
+pause
+.IP "> / <"
+increase / decrease tempo
+.IP "f / F"
+forward by approximately 1000 / 10000 ticks
+.IP "r / R"
+rewind by approximately 1000 / 10000 ticks
+.IP "v / V"
+increase / decrease verbosity
+.IP "q"
+quit
+
+.SH SEE ALSO
+aplaymidi(1)
+.br
+pmidi(1)
+.br
+playmidi(1)
+
+.SH AUTHORS
+Clemens Ladisch <clemens@ladisch.de>
+.br
+mwnx <mwnx@gmx.com>
