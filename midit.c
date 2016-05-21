@@ -107,6 +107,8 @@ static int max_time_s;		//max time minutes
 static int max_time_m;		//max time seconds
 static long long time_passed;
 static struct track *tempo_track;
+static char redirect_channel = -1;
+static char no_pgmchange = 0;
 
 int verbprintf(int required_verbosity , char* s, ...)
 {
@@ -137,6 +139,7 @@ void unbuffer_stdin()
 	/* set the new settings immediately */
 	tcsetattr(STDIN_FILENO,TCSANOW,&new_tio);
 }
+
 void rebuffer_stdin()
 {
 	/* restore the former settings */
@@ -151,7 +154,6 @@ void block_stdin()
 {
 	fcntl(0, F_SETFL, O_ASYNC);
 }
-
 
 void quit(int q)
 {
@@ -319,6 +321,7 @@ static int read_id(void)
 {
 	return read_32_le();
 }
+
 #define MAKE_ID(c1, c2, c3, c4) ((c1) | ((c2) << 8) | ((c3) << 16) | ((c4) << 24))
 
 /* reads a fixed-size big-endian number */
@@ -444,7 +447,7 @@ static int read_track(struct track *track, int track_end)
 			event->type = cmd_type[cmd >> 4];
 			event->port = port;
 			event->tick = tick;
-			event->data.d[0] = cmd & 0x0f;
+			event->data.d[0] = ((redirect_channel >= 0) ? redirect_channel : cmd) & 0x0f;
 			event->data.d[1] = read_byte() & 0x7f;
 			event->data.d[2] = read_byte() & 0x7f;
 			break;
@@ -455,7 +458,7 @@ static int read_track(struct track *track, int track_end)
 			event->type = cmd_type[cmd >> 4];
 			event->port = port;
 			event->tick = tick;
-			event->data.d[0] = cmd & 0x0f;
+			event->data.d[0] = ((redirect_channel >= 0) ? redirect_channel : cmd) & 0x0f;
 			event->data.d[1] = read_byte() & 0x7f;
 			break;
 
@@ -770,6 +773,7 @@ void set_tempo(snd_seq_event_t *ev, int new_tempo)
 	if ( verbosity >= 2 ) printf("original tempo: %dbpm | play tempo: %d%% => %dbpm\n",
 		60000000/original_tempo, tempo_percentage, 60000000/tempo);
 }
+
 int set_tempo_direct(int new_tempo)
 {
 	snd_seq_event_t ev;
@@ -788,6 +792,7 @@ int set_tempo_direct(int new_tempo)
 		60000000/original_tempo, tempo_percentage, 60000000/tempo);
 	return snd_seq_event_output_direct(seq, &ev);
 }
+
 int set_tempo_percentage(int percent)
 {
 	if ( percent > 0 )
@@ -827,7 +832,6 @@ int all_notes_off()
 	return 1;
 }
 
-
 long long time_of_tick(int tick)
 {
 	struct event *event = tempo_track->first_event;
@@ -851,94 +855,93 @@ long long time_of_tick(int tick)
 	return total_time; //(microseconds)
 }
 
-
 void make_event_from(struct event *event, snd_seq_event_t *ev)
-{/*
-	snd_seq_ev_clear(&ev);
-	ev.queue = queue;
-	ev.source.port = 0;
-	ev.flags = SND_SEQ_TIME_STAMP_TICK;
-*/
-		ev->type = event->type;
-		ev->time.tick = event->tick;
-		//dprintf("%d ",ev->time.tick);
-		if (verbosity >= 4)
-			printf("tick: %d\t/ %d| ", ev->time.tick, max_tick);
-		else if (verbosity == 3 || verbosity == 2 || verbosity == 1)
-		{
-			//puts("       ");
-			if ( verbosity == 2 || verbosity == 1 ) //save cursor position
-				printf("\0337");
+{
+	ev->type = event->type;
+	ev->time.tick = event->tick;
+	//dprintf("%d ",ev->time.tick);
+	if (verbosity >= 4)
+		printf("tick: %d\t/ %d| ", ev->time.tick, max_tick);
+	else if (verbosity == 3 || verbosity == 2 || verbosity == 1)
+	{
+		//puts("       ");
+		if ( verbosity == 2 || verbosity == 1 ) //save cursor position
+			printf("\0337");
 
-			int total_seconds = (time_passed/1000000);
-			int minutes = total_seconds / 60;
-			int seconds = total_seconds % 60;
-			if ( minutes < 10 ) 	printf("0%d:", minutes);
-			else 					printf("%d:", minutes);
-			if ( seconds < 10 ) 	printf("0%d / ", seconds);
-			else 					printf("%d / ", seconds);
-			if ( max_time_m < 10 ) 	printf("0%d:", max_time_m);
-			else					printf("%d:", max_time_m);
-			if ( max_time_s < 10 ) 	printf("0%d", max_time_s);
-			else 					printf("%d", max_time_s );
+		int total_seconds = (time_passed/1000000);
+		int minutes = total_seconds / 60;
+		int seconds = total_seconds % 60;
+		if ( minutes < 10 ) 	printf("0%d:", minutes);
+		else 					printf("%d:", minutes);
+		if ( seconds < 10 ) 	printf("0%d / ", seconds);
+		else 					printf("%d / ", seconds);
+		if ( max_time_m < 10 ) 	printf("0%d:", max_time_m);
+		else					printf("%d:", max_time_m);
+		if ( max_time_s < 10 ) 	printf("0%d", max_time_s);
+		else 					printf("%d", max_time_s );
 
-			if ( verbosity == 2 || verbosity == 1 ) //restore cursor position
-				printf("\0338");
-			else printf(" | ");
-		}
-		ev->dest = ports[event->port];
-		switch (ev->type)
-		{
-			case SND_SEQ_EVENT_NOTEON:
-			case SND_SEQ_EVENT_NOTEOFF:
-			case SND_SEQ_EVENT_KEYPRESS:
-				snd_seq_ev_set_fixed(ev);
-				ev->data.note.channel = event->data.d[0];
-				ev->data.note.note = event->data.d[1];
-				ev->data.note.velocity = event->data.d[2];
-				if ( verbosity >= 3 ) printf("ch:%d\t| note:%d\t| vel:%d\n",
-					ev->data.note.channel,
-					ev->data.note.note, ev->data.note.velocity);
+		if ( verbosity == 2 || verbosity == 1 ) //restore cursor position
+			printf("\0338");
+		else printf(" | ");
+	}
+	ev->dest = ports[event->port];
+	switch (ev->type)
+	{
+		case SND_SEQ_EVENT_NOTEON:
+		case SND_SEQ_EVENT_NOTEOFF:
+		case SND_SEQ_EVENT_KEYPRESS:
+			snd_seq_ev_set_fixed(ev);
+			ev->data.note.channel = event->data.d[0];
+			ev->data.note.note = event->data.d[1];
+			ev->data.note.velocity = event->data.d[2];
+			if ( verbosity >= 3 ) printf("ch:%d\t| note:%d\t| vel:%d\n",
+				ev->data.note.channel,
+				ev->data.note.note, ev->data.note.velocity);
+			break;
+		case SND_SEQ_EVENT_CONTROLLER:
+			snd_seq_ev_set_fixed(ev);
+			ev->data.control.channel = event->data.d[0];
+			ev->data.control.param = event->data.d[1];
+			ev->data.control.value = event->data.d[2];
+			if ( verbosity >= 3 ) printf("ch:%d\t| ctrl:%d\t| val:%d\n",ev->data.note.channel,
+				ev->data.note.note, ev->data.note.velocity);
+			break;
+		case SND_SEQ_EVENT_PGMCHANGE:
+		case SND_SEQ_EVENT_CHANPRESS:
+			if (no_pgmchange) 
+			{
+				ev->type = SND_SEQ_EVENT_NONE;
 				break;
-			case SND_SEQ_EVENT_CONTROLLER:
-				snd_seq_ev_set_fixed(ev);
-				ev->data.control.channel = event->data.d[0];
-				ev->data.control.param = event->data.d[1];
-				ev->data.control.value = event->data.d[2];
-				if ( verbosity >= 3 ) printf("ch:%d\t| ctrl:%d\t| val:%d\n",ev->data.note.channel,
-					ev->data.note.note, ev->data.note.velocity);
-				break;
-			case SND_SEQ_EVENT_PGMCHANGE:
-			case SND_SEQ_EVENT_CHANPRESS:
-				snd_seq_ev_set_fixed(ev);
-				ev->data.control.channel = event->data.d[0];
-				ev->data.control.value = event->data.d[1];
-				if ( verbosity >= 3 ) printf("ch:%d\t| prog change:%d\n",
-					ev->data.control.channel, ev->data.control.value);
-				break;
-			case SND_SEQ_EVENT_PITCHBEND:
-				snd_seq_ev_set_fixed(ev);
-				ev->data.control.channel = event->data.d[0];
-				ev->data.control.value =
-					((event->data.d[1]) |
-					 ((event->data.d[2]) << 7)) - 0x2000;
-				if ( verbosity >= 3 ) printf("ch:%d\t| pitchbend:%d\n",
-					ev->data.control.value, ev->data.control.channel);
-				break;
-			case SND_SEQ_EVENT_SYSEX:
-				snd_seq_ev_set_variable(ev, event->data.length,
-							event->sysex);
-				handle_big_sysex(ev);
-				if ( verbosity >= 3 ) printf("sysex\n");
-				break;
-			case SND_SEQ_EVENT_TEMPO:
-				original_tempo = event->data.tempo;
-				tempo = original_tempo * (100.0/(float)tempo_percentage);
-				set_tempo(ev, tempo);
-				break;
-			default:
-				fatal("Invalid event type %d!", ev->type);
-		}
+			}
+			snd_seq_ev_set_fixed(ev);
+			ev->data.control.channel = event->data.d[0];
+			ev->data.control.value = event->data.d[1];
+			if ( verbosity >= 3 ) printf("ch:%d\t| prog change:%d\n",
+				ev->data.control.channel, ev->data.control.value);
+			break;
+		case SND_SEQ_EVENT_PITCHBEND:
+			snd_seq_ev_set_fixed(ev);
+			ev->data.control.channel = event->data.d[0];
+			ev->data.control.value =
+				((event->data.d[1]) |
+				 ((event->data.d[2]) << 7)) - 0x2000;
+			if ( verbosity >= 3 ) printf("ch:%d\t| pitchbend:%d\n",
+				ev->data.control.value, ev->data.control.channel);
+			break;
+		case SND_SEQ_EVENT_SYSEX:
+			snd_seq_ev_set_variable(ev, event->data.length,
+						event->sysex);
+			handle_big_sysex(ev);
+			if ( verbosity >= 3 ) printf("sysex\n");
+			break;
+		case SND_SEQ_EVENT_TEMPO:
+			original_tempo = event->data.tempo;
+			tempo = original_tempo * (100.0/(float)tempo_percentage);
+			set_tempo(ev, tempo);
+			break;
+		default:
+			fatal("Invalid event type %d!", ev->type);
+	}
 }
 
 int midi_seek(int ticks, int actual_tick)
@@ -1354,7 +1357,9 @@ static void usage(const char *argv0)
 		"-d, --delay=seconds         delay after song ends\n"
 		"-s, --seek=ticks            seek in ticks\n"
 		"-T, --tempo=n               tempo in percent\n"
-		"-v, --verbosity=n           verbosity from 0 to 10\n",
+		"-v, --verbosity=n           verbosity from 0 to 10\n"
+		"-c, --channel=n             redirect to channel n (from 0 to 15)\n"
+		"-n, --no-pgmchange          disallow program changes\n",
 		argv0);
 }
 
@@ -1378,16 +1383,18 @@ void set_signals()
 
 int main(int argc, char *argv[])
 {
-	static const char short_options[] = "hVlp:d:s:T:v:";
+	static const char short_options[] = "hVlp:d:s:T:v:c:n";
 	static const struct option long_options[] = {
-		{"help", 0, NULL, 'h'},
-		{"version", 0, NULL, 'V'},
-		{"list", 0, NULL, 'l'},
-		{"port", 1, NULL, 'p'},
-		{"delay", 1, NULL, 'd'},
-		{"seek", 1, NULL, 's'},
-		{"tempo", 1, NULL, 'T'},
-		{"verbosity", 1, NULL, 'v'},
+		{"help",		0,	NULL,	'h'},
+		{"version",		0,	NULL,	'V'},
+		{"list",		0,	NULL,	'l'},
+		{"port",		1,	NULL,	'p'},
+		{"delay",		1,	NULL,	'd'},
+		{"seek",		1,	NULL,	's'},
+		{"tempo",		1,	NULL,	'T'},
+		{"verbosity",		1,	NULL,	'v'},
+		{"channel",		1,	NULL,	'c'},
+		{"no-pgmchange",	0,	NULL,	'n'},
 		{0,0,0,0}
 	};
 	int c;
@@ -1421,10 +1428,16 @@ int main(int argc, char *argv[])
 		case 's':
 			start_seek = atoi(optarg);
 			break;
+		case 'c':
+			redirect_channel = atoi(optarg);
+			break;
+		case 'n':
+			no_pgmchange = 1;
+			break;
 		case 'T':
 			if ( set_tempo_percentage(atoi(optarg)) != 1 )
 			{
-				fprintf(stderr, "tempo percentage must be >= 1");
+				fprintf(stderr, "Tempo percentage must be >= 1\n");
 				return 1;
 			}
 			break;
