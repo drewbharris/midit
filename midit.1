@@ -63,6 +63,15 @@ Starts playback at the number of ticks specified. (only for the first file)
 .I \-v, \-\-verbosity=[0-10]
 Specifies the verbosity on a scale from zero to ten. Default is two.
 
+.TP
+.I \-c, \-\-channel=[0-15]
+Redirect all signals to the specified channel.
+
+.TP
+.I \-n, \-\-no-pgmchange
+Ignore "program change" events. Useful in combination with \-c to have all
+notes in a MIDI file played with a single instrument.
+
 .SH INTERACTIVE CONTROL
 .PD 0
 .IP "space"
@@ -79,10 +88,8 @@ increase / decrease verbosity
 quit
 
 .SH SEE ALSO
-aplaymidi(1)
-.br
-pmidi(1)
-.br
+aplaymidi(1),
+pmidi(1),
 playmidi(1)
 
 .SH AUTHORS
