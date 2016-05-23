@@ -39,6 +39,7 @@
 #define VERSION "no_version"
 #endif
 
+#define VERBOSE_MAX 4
 //#define VERBOSE_DEBUG 10
 //#define dprintf(...) verbprintf(VERBOSE_DEBUG, __VA_ARGS__)
 
@@ -109,6 +110,8 @@ static long long time_passed;
 static struct track *tempo_track;
 static char redirect_channel = -1;
 static char no_pgmchange = 0;
+
+static void interactiveUsage(void);
 
 int verbprintf(int required_verbosity , char* s, ...)
 {
@@ -1169,6 +1172,20 @@ static void play_midi(void)
 						check_snd("output event", err);
 					}
 					goto tempo_change;
+				//TEMPO =:
+				case '=':
+					//backup_verbosity = verbosity;
+					//if ( verbosity == 1 ) verbosity = 2;
+					if (!(set_tempo_percentage(100)))
+					{
+						if ( verbosity >= 1 ) printf("can't set tempo percentage");
+					}
+					else if ( original_tempo > 0 )
+					{
+						err = set_tempo_direct(original_tempo*(100.0/(float)tempo_percentage));
+						check_snd("output event", err);
+					}
+					goto tempo_change;
 				//TEMPO -:
 				case '<':
 					//backup_verbosity = verbosity;
@@ -1215,6 +1232,10 @@ static void play_midi(void)
 				skip:
 					time_passed = time_of_tick(old_ev_tick);
 					break;
+				//HELP:
+				case 'h':
+					interactiveUsage();
+					break;
 				//QUIT:
 				case 'q':
 					quit(0);
@@ -1227,7 +1248,8 @@ static void play_midi(void)
 					break;
 				//VERBOSITY +:
 				case 'V':
-					verbosity++;
+					if (verbosity < VERBOSE_MAX)
+						verbosity++;
 					if ( verbosity >= 1 ) printf("verbosity : %d\n", verbosity);
 					break;
 				default:
@@ -1346,10 +1368,23 @@ static void list_ports(void)
 	}
 }
 
-static void usage(const char *argv0)
+static void interactiveUsage(void)
 {
 	printf(
-		"Usage: %s -p client:port[,...] [-d delay] midifile ...\n"
+		"Interactive Control\n"
+		"<space>                     Pause / play\n"
+		"> / = /<                    Increase / normal / decrease tempo\n"
+		"f / F                       Forward by approximately 1000 / 10000 ticks\n"
+		"r / R                       Rewind by approximately 1000 / 10000 ticks\n"
+		"v / V                       Decrease / increase verbosity\n"
+		"h                           This help\n"
+		"q                           Quit\n");
+}
+
+static void usage(const char *argv0)
+{
+	printf("Usage: %s -p client:port[,...] [-d delay] midifile ...\n", argv0);
+	printf(
 		"-h, --help                  this help\n"
 		"-V, --version               print current version\n"
 		"-l, --list                  list all possible output ports\n"
@@ -1359,8 +1394,9 @@ static void usage(const char *argv0)
 		"-T, --tempo=n               tempo in percent\n"
 		"-v, --verbosity=n           verbosity from 0 to 10\n"
 		"-c, --channel=n             redirect to channel n (from 0 to 15)\n"
-		"-n, --no-pgmchange          disallow program changes\n",
-		argv0);
+		"-n, --no-pgmchange          disallow program changes\n"
+		"\n");
+	interactiveUsage();
 }
 
 static void version(void)
@@ -1443,6 +1479,14 @@ int main(int argc, char *argv[])
 			break;
 		case 'v':
 			verbosity = atoi(optarg);
+			if (verbosity < 0)
+			{
+				verbosity = 0;
+			}
+			else if (verbosity > VERBOSE_MAX)
+			{
+				verbosity = VERBOSE_MAX;
+			}
 			break;
 		default:
 			usage(argv[0]);
