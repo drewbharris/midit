@@ -1275,7 +1275,7 @@ static void play_midi(void)
 					if ( verbosity >= 1 ) printf("verbosity : %d\n", verbosity);
 					break;
 				default:
-					if ( verbosity >= 1 ) printf("unrecognized command: '%c'", ch);
+					if ( verbosity >= 1 ) printf("unrecognized command: '%c'\n", ch);
 					break;
 			}
 		}
