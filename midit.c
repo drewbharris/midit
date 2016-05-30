@@ -108,7 +108,7 @@ static int max_time_s;		//max time minutes
 static int max_time_m;		//max time seconds
 static long long time_passed;
 static struct track *tempo_track;
-static char redirect_channel = -1;
+static int redirect_channel = -1;
 static char no_pgmchange = 0;
 
 static void interactiveUsage(void);
@@ -821,7 +821,7 @@ int all_notes_off()
 	ev.type = SND_SEQ_EVENT_CONTROLLER;
 	//All notes off:
 	ev.data.control.param = 123;
-	ev.data.control.value = 127;
+	ev.data.control.value = 0;
 	for (j=0; j < port_count; j++)
 	{
 		ev.dest = ports[j];
@@ -906,8 +906,9 @@ void make_event_from(struct event *event, snd_seq_event_t *ev)
 			ev->data.control.channel = event->data.d[0];
 			ev->data.control.param = event->data.d[1];
 			ev->data.control.value = event->data.d[2];
-			if ( verbosity >= 3 ) printf("ch:%d\t| ctrl:%d\t| val:%d\n",ev->data.note.channel,
-				ev->data.note.note, ev->data.note.velocity);
+			if ( verbosity >= 3 ) printf("ch:%d\t| ctrl:%d\t| val:%d\n",
+				ev->data.control.channel,
+				ev->data.control.param, ev->data.control.value);
 			break;
 		case SND_SEQ_EVENT_PGMCHANGE:
 		case SND_SEQ_EVENT_CHANPRESS:
@@ -929,7 +930,7 @@ void make_event_from(struct event *event, snd_seq_event_t *ev)
 				((event->data.d[1]) |
 				 ((event->data.d[2]) << 7)) - 0x2000;
 			if ( verbosity >= 3 ) printf("ch:%d\t| pitchbend:%d\n",
-				ev->data.control.value, ev->data.control.channel);
+				ev->data.control.channel, ev->data.control.value);
 			break;
 		case SND_SEQ_EVENT_SYSEX:
 			snd_seq_ev_set_variable(ev, event->data.length,
