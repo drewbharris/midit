@@ -110,6 +110,7 @@ static long long time_passed;
 static struct track *tempo_track = NULL;
 static int redirect_channel = -1;
 static char no_pgmchange = 0;
+static int previous_file = 0;
 
 static void interactiveUsage(void);
 
@@ -1002,7 +1003,7 @@ int midi_seek(int ticks, int actual_tick)
 			}
 		}
 	}
-	else if (ticks < 0)
+	else
 	{
 		//We replay all the file from the beginning because we want
 		//to take into account events like tempo change or program change
@@ -1040,7 +1041,6 @@ int midi_seek(int ticks, int actual_tick)
 			}
 		}
 	}
-	else min_tick = 0; //returns 0
 	snd_seq_ev_set_queue_pos_tick(&ev_direct, queue, min_tick);
 	err = snd_seq_event_output_direct(seq, &ev_direct);
 	check_snd("output event", err);
@@ -1217,7 +1217,6 @@ static void play_midi(void)
 					if ( !(event) ) break;
 					//else:
 					old_ev_tick = midi_seek(1000, event->tick);
-					all_notes_off();
 					goto skip;
 				//FORWARD ~10000 ticks
 				case 'F':
@@ -1225,18 +1224,29 @@ static void play_midi(void)
 					if ( !(event) ) break;
 					//else:
 					old_ev_tick = midi_seek(10000, event->tick);
-					all_notes_off();
+					goto skip;
+				//BEGINNING
+				case 'B':
+					if ( !(event) ) break;
+					old_ev_tick = midi_seek(start_seek, 0);
+					goto skip;
+				//PREVIOUS FILE
+				case 'P':
+					previous_file = 1;
+				//NEXT FILE
+				case 'N':
+					if ( !(event) ) break;
+					old_ev_tick = midi_seek(max_tick, event->tick);
 					goto skip;
 				//REWIND ~1000 ticks:
 				case 'r':
 					old_ev_tick = midi_seek(-1000, event->tick);
-					all_notes_off();
 					goto skip;
 				//REWIND ~10000 ticks:
 				case 'R':
 					old_ev_tick = midi_seek(-10000, event->tick);
-					all_notes_off();
 				skip:
+					all_notes_off();
 					time_passed = time_of_tick(old_ev_tick);
 					break;
 				//HELP:
@@ -1384,6 +1394,7 @@ static void interactiveUsage(void)
 		"f / F                       Forward by approximately 1000 / 10000 ticks\n"
 		"r / R                       Rewind by approximately 1000 / 10000 ticks\n"
 		"v / V                       Decrease / increase verbosity\n"
+		"B / N / P                   Beginning of current file / next / previous file\n"
 		"h                           This help\n"
 		"q                           Quit\n");
 }
@@ -1528,9 +1539,19 @@ int main(int argc, char *argv[])
 		create_queue();
 		connect_ports();
 
+		int originalIndex = optind;
 		for (; optind < argc; ++optind) {
 			file_name = argv[optind];
 			play_file();
+			if (previous_file)
+			{
+				previous_file = 0;
+				optind--;
+				if (optind >= originalIndex)
+				{
+					optind--;
+				}
+			}
 		}
 
 		quit(0);
