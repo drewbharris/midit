@@ -90,7 +90,7 @@ static const char *file_name;
 static FILE *file;
 static int file_offset;		/* current offset in input file */
 static int num_tracks;
-static struct track *tracks;
+static struct track *tracks = NULL;
 static int smpte_timing;
 static int ppq;
 static int original_tempo;
@@ -107,7 +107,7 @@ static long long max_time;		//(seconds)
 static int max_time_s;		//max time minutes
 static int max_time_m;		//max time seconds
 static long long time_passed;
-static struct track *tempo_track;
+static struct track *tempo_track = NULL;
 static int redirect_channel = -1;
 static char no_pgmchange = 0;
 
@@ -721,12 +721,18 @@ static void cleanup_file_data(void)
 
 	for (i = 0; i < num_tracks; ++i)
 		free_event_list(tracks[i].first_event);
-	free_event_list(tempo_track->first_event);
+	if (tempo_track != NULL)
+	{
+		free_event_list(tempo_track->first_event);
+		free(tempo_track);
+		tempo_track = NULL;
+	}
 	num_tracks = 0;
-	free(tracks);
-	free(tempo_track);
-	tracks = NULL;
-	tempo_track = NULL;
+	if (tracks != NULL)
+	{
+		free(tracks);
+		tracks = NULL;
+	}
 }
 
 static void handle_big_sysex(snd_seq_event_t *ev)
