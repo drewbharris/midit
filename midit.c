@@ -43,6 +43,9 @@
 //#define VERBOSE_DEBUG 10
 //#define dprintf(...) verbprintf(VERBOSE_DEBUG, __VA_ARGS__)
 
+#define ALL_QUIET send_channel_mode(120, 0)	/* all_sound_off */
+//#define ALL_QUIET send_channel_mode(123, 0)	/* all_notes_off */.
+
 /*
  * 31.25 kbaud, one start bit, eight data bits, two stop bits.
  * (The MIDI spec says one stop bit, but every transmitter uses two, just to be
@@ -165,7 +168,7 @@ void quit(int q)
 {
 	snd_seq_event_t ev;
 	snd_seq_ev_set_queue_stop(&ev, queue);
-	all_notes_off();
+	ALL_QUIET;
 	snd_seq_close(seq);
 	//put terminal back to normal:
 	rebuffer_stdin();
@@ -815,7 +818,7 @@ int set_tempo_percentage(int percent)
 	else return 0;
 }
 
-int all_notes_off()
+int send_channel_mode(int param, int value)
 {
 	int i, j, err;
 	//wait for all notes to be played:
@@ -829,8 +832,8 @@ int all_notes_off()
 	//!!! WHAT ABOUT OTHER PORTS?:
 	ev.type = SND_SEQ_EVENT_CONTROLLER;
 	//All notes off:
-	ev.data.control.param = 123;
-	ev.data.control.value = 0;
+	ev.data.control.param = param;
+	ev.data.control.value = value;
 	for (j=0; j < port_count; j++)
 	{
 		ev.dest = ports[j];
@@ -1160,7 +1163,7 @@ static void play_midi(void)
 					if ( verbosity >= 3 ) printf("\nPAUSE\n");
 					if ( verbosity == 2 ) printf("\033[20CPAUSE");
 					block_stdin();
-					all_notes_off();
+					ALL_QUIET;
 					getc(stdin);
 					unblock_stdin();
 					if ( verbosity == 2 ) printf("\033[1K\033[25D");
@@ -1248,7 +1251,7 @@ static void play_midi(void)
 				case 'R':
 					old_ev_tick = midi_seek(-10000, event->tick);
 				skip:
-					all_notes_off();
+					ALL_QUIET;
 					time_passed = time_of_tick(old_ev_tick);
 					break;
 				//HELP:
