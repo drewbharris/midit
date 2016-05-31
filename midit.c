@@ -87,6 +87,9 @@ static snd_seq_addr_t *ports;
 static int queue;
 static int end_delay = 2;
 static const char *file_name;
+static int file_index = 0;
+static int file_index_increment = 1;
+static int file_count = 0;
 static FILE *file;
 static int file_offset;		/* current offset in input file */
 static int num_tracks;
@@ -110,7 +113,6 @@ static long long time_passed;
 static struct track *tempo_track = NULL;
 static int redirect_channel = -1;
 static char no_pgmchange = 0;
-static int previous_file = 0;
 
 static void interactiveUsage(void);
 
@@ -1232,7 +1234,7 @@ static void play_midi(void)
 					goto skip;
 				//PREVIOUS FILE
 				case 'P':
-					previous_file = 1;
+					file_index_increment = -1;
 				//NEXT FILE
 				case 'N':
 					if ( !(event) ) break;
@@ -1313,7 +1315,15 @@ static void play_file(void)
 {
 	int ok;
 
-	if ( verbosity >= 2 ) printf("Playing \"%s\"\n", file_name);
+	if ( verbosity >= 2 )
+	{
+		printf("Playing ");
+		if (file_count > 1)
+		{
+			printf("(%d/%d) ", (file_index + 1), file_count);
+		}
+		printf("\"%s\"\n", file_name);
+	}
 	if (!strcmp(file_name, "-"))
 		file = stdin;
 	else
@@ -1408,6 +1418,7 @@ static void usage(const char *argv0)
 		"-l, --list                  list all possible output ports\n"
 		"-p, --port=client:port,...  set port(s) to play to\n"
 		"-d, --delay=seconds         delay after song ends\n"
+		"-i, --index=index           start file index\n"
 		"-s, --seek=ticks            seek in ticks\n"
 		"-T, --tempo=n               tempo in percent\n"
 		"-v, --verbosity=n           verbosity from 0 to 10\n"
@@ -1437,13 +1448,14 @@ void set_signals()
 
 int main(int argc, char *argv[])
 {
-	static const char short_options[] = "hVlp:d:s:T:v:c:n";
+	static const char short_options[] = "hVlp:d:i:s:T:v:c:n";
 	static const struct option long_options[] = {
 		{"help",		0,	NULL,	'h'},
 		{"version",		0,	NULL,	'V'},
 		{"list",		0,	NULL,	'l'},
 		{"port",		1,	NULL,	'p'},
 		{"delay",		1,	NULL,	'd'},
+		{"index",		1,	NULL,	'i'},
 		{"seek",		1,	NULL,	's'},
 		{"tempo",		1,	NULL,	'T'},
 		{"verbosity",		1,	NULL,	'v'},
@@ -1478,6 +1490,13 @@ int main(int argc, char *argv[])
 			break;
 		case 'd':
 			end_delay = atoi(optarg);
+			break;
+		case 'i':
+			file_index = atoi(optarg) - 1;
+			if (file_index < 0)
+			{
+				file_index = 0;
+			}
 			break;
 		case 's':
 			start_seek = atoi(optarg);
@@ -1539,19 +1558,17 @@ int main(int argc, char *argv[])
 		create_queue();
 		connect_ports();
 
-		int originalIndex = optind;
-		for (; optind < argc; ++optind) {
-			file_name = argv[optind];
+		file_count = argc - optind;
+		while (file_index < file_count)
+		{
+			file_name = argv[optind + file_index];
 			play_file();
-			if (previous_file)
+			file_index += file_index_increment;
+			if (file_index < 0)
 			{
-				previous_file = 0;
-				optind--;
-				if (optind >= originalIndex)
-				{
-					optind--;
-				}
+				file_index = 0;
 			}
+			file_index_increment = 1;
 		}
 
 		quit(0);
