@@ -52,12 +52,16 @@ Specifies how long to wait after the end of each MIDI file,
 to allow the last notes to die away.
 
 .TP
-.I \-T, \-\-tempo=tempo_percentage
-Specifies the percentage of the playback tempo in respect to original tempo.
+.I \-i, \-\-index=index
+Specifies the starting file index when playing from a directory or playlist.
 
 .TP
 .I \-s, \-\-seek=ticks
 Starts playback at the number of ticks specified. (only for the first file)
+
+.TP
+.I \-T, \-\-tempo=tempo_percentage
+Specifies the percentage of the playback tempo in respect to original tempo.
 
 .TP
 .I \-v, \-\-verbosity=[0-10]
@@ -75,15 +79,19 @@ notes in a MIDI file played with a single instrument.
 .SH INTERACTIVE CONTROL
 .PD 0
 .IP "space"
-pause
-.IP "> / <"
-increase / decrease tempo
+pause / play
+.IP "> / = / <"
+increase / normal / decrease tempo
 .IP "f / F"
 forward by approximately 1000 / 10000 ticks
 .IP "r / R"
 rewind by approximately 1000 / 10000 ticks
 .IP "v / V"
 increase / decrease verbosity
+.IP "B / N / P"
+Beginning of current file / next / previous file
+.IP "h"
+Prints a list of interactive help
 .IP "q"
 quit
 
