@@ -44,7 +44,7 @@
 //#define dprintf(...) verbprintf(VERBOSE_DEBUG, __VA_ARGS__)
 
 #define ALL_QUIET send_channel_mode(120, 0)	/* all_sound_off */
-//#define ALL_QUIET send_channel_mode(123, 0)	/* all_notes_off */.
+//#define ALL_QUIET send_channel_mode(123, 0)	/* all_notes_off */
 
 /*
  * 31.25 kbaud, one start bit, eight data bits, two stop bits.
@@ -83,6 +83,13 @@ struct track {
 sig_atomic_t sigio_count;
 struct sigaction sigio_sa;
 
+enum {
+	REPEAT_SHUFFLE = -2,
+	REPEAT_ALL = -1,
+	REPEAT_NONE = 0,
+	REPEAT_CURRENT = 1
+};
+
 static snd_seq_t *seq;
 static int client;
 static int port_count;
@@ -90,9 +97,10 @@ static snd_seq_addr_t *ports;
 static int queue;
 static int end_delay = 2;
 static const char *file_name;
-static int file_index = 0;
-static int file_index_increment = 1;
+static int file_index = -1;
+static int file_index_increment = 0;	// 0=standard to next file without skipping
 static int file_count = 0;
+static int repeat_type = REPEAT_NONE;
 static FILE *file;
 static int file_offset;		/* current offset in input file */
 static int num_tracks;
@@ -594,6 +602,7 @@ invalid_format:
 		return 0;
 	}
 	memset(tempo_track, 0, sizeof(struct track));
+	memset(tracks, 0, (num_tracks * sizeof(struct track)));
 
 	time_division = read_int(2);
 	if (time_division < 0)
@@ -1238,8 +1247,11 @@ static void play_midi(void)
 				//PREVIOUS FILE
 				case 'P':
 					file_index_increment = -1;
+					goto change_file;
 				//NEXT FILE
 				case 'N':
+					file_index_increment = 1;
+				change_file:
 					if ( !(event) ) break;
 					old_ev_tick = midi_seek(max_tick, event->tick);
 					goto skip;
@@ -1253,6 +1265,26 @@ static void play_midi(void)
 				skip:
 					ALL_QUIET;
 					time_passed = time_of_tick(old_ev_tick);
+					break;
+				//REPEAT: NONE
+				case ')':
+					repeat_type = REPEAT_NONE;
+					if (verbosity >= 3) printf("repeat: none\n");
+					break;
+				//REPEAT: CURRENT
+				case '!':
+					repeat_type = REPEAT_CURRENT;
+					if (verbosity >= 3) printf("repeat: current\n");
+					break;
+				//REPEAT: ALL
+				case '*':
+					repeat_type = REPEAT_ALL;
+					if (verbosity >= 3) printf("repeat: all\n");
+					break;
+				//REPEAT: SHUFFLE
+				case '#':
+					repeat_type = REPEAT_SHUFFLE;
+					if (verbosity >= 3) printf("repeat: shuffle\n");
 					break;
 				//HELP:
 				case 'h':
@@ -1408,6 +1440,7 @@ static void interactiveUsage(void)
 		"r / R                       Rewind by approximately 1000 / 10000 ticks\n"
 		"v / V                       Decrease / increase verbosity\n"
 		"B / N / P                   Beginning of current file / next / previous file\n"
+		") / ! / * / #               Change repeat mode: none / current / all / shuffle\n"
 		"h                           This help\n"
 		"q                           Quit\n");
 }
@@ -1422,6 +1455,7 @@ static void usage(const char *argv0)
 		"-p, --port=client:port,...  set port(s) to play to\n"
 		"-d, --delay=seconds         delay after song ends\n"
 		"-i, --index=index           start file index\n"
+		"-r, --repeat=type           repeat type: none, current, all, or shuffle\n"
 		"-s, --seek=ticks            seek in ticks\n"
 		"-T, --tempo=n               tempo in percent\n"
 		"-v, --verbosity=n           verbosity from 0 to 10\n"
@@ -1449,9 +1483,39 @@ void set_signals()
 	sigaction(SIGIO, &sigio_sa, NULL);
 }
 
+// Assumes 0 <= max <= RAND_MAX
+// Returns in the half-open interval [0, max]
+long random_at_most(long max)
+{
+	unsigned long
+		// max <= RAND_MAX < ULONG_MAX, so this is okay.
+		num_bins = (unsigned long) max + 1,
+		num_rand = (unsigned long) RAND_MAX + 1,
+		bin_size = num_rand / num_bins,
+		defect   = num_rand % num_bins;
+
+	long x;
+	do {
+		x = random();
+		// This is carefully written not to overflow
+	} while ((num_rand - defect) <= (unsigned long) x);
+
+	// Truncated division is intentional
+	return (x / bin_size);
+}
+
+long long current_timestamp(void)
+{
+	struct timeval te;
+	gettimeofday(&te, NULL); // get current time
+	long long milliseconds = (te.tv_sec * 1000LL) + (te.tv_usec / 1000); // caculate milliseconds
+	// printf("milliseconds: %lld\n", milliseconds);
+	return (milliseconds);
+}
+
 int main(int argc, char *argv[])
 {
-	static const char short_options[] = "hVlp:d:i:s:T:v:c:n";
+	static const char short_options[] = "hVlp:d:i:r:s:T:v:c:n";
 	static const struct option long_options[] = {
 		{"help",		0,	NULL,	'h'},
 		{"version",		0,	NULL,	'V'},
@@ -1459,6 +1523,7 @@ int main(int argc, char *argv[])
 		{"port",		1,	NULL,	'p'},
 		{"delay",		1,	NULL,	'd'},
 		{"index",		1,	NULL,	'i'},
+		{"repeat",		1,	NULL,	'r'},
 		{"seek",		1,	NULL,	's'},
 		{"tempo",		1,	NULL,	'T'},
 		{"verbosity",		1,	NULL,	'v'},
@@ -1475,6 +1540,8 @@ int main(int argc, char *argv[])
 	num_channels = 16;
 	verbosity = 2;
 	start_seek = 0;
+
+	srandom(current_timestamp());
 
 	while ((c = getopt_long(argc, argv, short_options,
 				long_options, NULL)) != -1) {
@@ -1496,9 +1563,19 @@ int main(int argc, char *argv[])
 			break;
 		case 'i':
 			file_index = atoi(optarg) - 1;
-			if (file_index < 0)
-			{
-				file_index = 0;
+			break;
+		case 'r':
+			if (strcasecmp(optarg, "none") == 0) {
+				repeat_type = REPEAT_NONE;
+			} else if (strcasecmp(optarg, "current") == 0) {
+				repeat_type = REPEAT_CURRENT;
+			} else if (strcasecmp(optarg, "all") == 0) {
+				repeat_type = REPEAT_ALL;
+			} else if (strcasecmp(optarg, "shuffle") == 0) {
+				repeat_type = REPEAT_SHUFFLE;
+			} else {
+				fprintf(stderr, "Invalid repeat type specified\n");
+				return (1);
 			}
 			break;
 		case 's':
@@ -1562,16 +1639,48 @@ int main(int argc, char *argv[])
 		connect_ports();
 
 		file_count = argc - optind;
-		while (file_index < file_count)
-		{
+		if (file_index < 0) {
+			switch (repeat_type) {
+			case REPEAT_NONE:
+			case REPEAT_CURRENT:
+			case REPEAT_ALL:
+				file_index = 0;
+				break;
+			case REPEAT_SHUFFLE:
+				file_index = random_at_most(file_count - 1);
+				break;
+			}
+		}
+		while (file_index < file_count) {
 			file_name = argv[optind + file_index];
 			play_file();
-			file_index += file_index_increment;
-			if (file_index < 0)
-			{
-				file_index = 0;
+
+			switch (repeat_type) {
+			case REPEAT_NONE:
+				file_index += ((file_index_increment == 0) ? 1 : file_index_increment);
+				if (file_index < 0)
+					file_index = 0;
+				break;
+			case REPEAT_CURRENT:
+				file_index += file_index_increment;
+				if (file_index < 0)
+					file_index = 0;
+				break;
+			case REPEAT_ALL:
+				file_index += ((file_index_increment == 0) ? 1 : file_index_increment);
+				if ((file_index < 0) || (file_index >= file_count))
+					file_index = 0;
+				break;
+			case REPEAT_SHUFFLE:
+				if (file_count > 1) {
+					int new_index = file_index;
+					while (new_index == file_index)
+						new_index = random_at_most(file_count - 1);
+					file_index = new_index;
+				}
+				break;
 			}
-			file_index_increment = 1;
+			file_index_increment = 0;
 		}
 
 		quit(0);

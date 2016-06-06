@@ -56,6 +56,10 @@ to allow the last notes to die away.
 Specifies the starting file index when playing from a directory or playlist.
 
 .TP
+.I \-r, \-\-repeat=type
+Specifies the repeat type as none, current, all, or shuffle.
+
+.TP
 .I \-s, \-\-seek=ticks
 Starts playback at the number of ticks specified. (only for the first file)
 
@@ -90,6 +94,8 @@ rewind by approximately 1000 / 10000 ticks
 increase / decrease verbosity
 .IP "B / N / P"
 Beginning of current file / next / previous file
+.IP ") / ! / * / #"
+Change repeat type: none / current / all / shuffle
 .IP "h"
 Prints a list of interactive help
 .IP "q"
