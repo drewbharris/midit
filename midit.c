@@ -28,11 +28,9 @@
 #include <string.h>
 #include <getopt.h>
 #include <unistd.h>
+#include <sys/time.h>
 #include <signal.h>
 #include <alsa/asoundlib.h>
-//#include <limits.h>
-//#include "aconfig.h"
-//#include "version.h"
 #include <termios.h>
 
 #ifndef VERSION
@@ -40,11 +38,12 @@
 #endif
 
 #define VERBOSE_MAX 4
-//#define VERBOSE_DEBUG 10
-//#define dprintf(...) verbprintf(VERBOSE_DEBUG, __VA_ARGS__)
+
+static int send_channel_mode(int param, int value);
 
 #define ALL_QUIET send_channel_mode(120, 0)	/* all_sound_off */
-//#define ALL_QUIET send_channel_mode(123, 0)	/* all_notes_off */
+/* Alternatively, ALL_QUIET could be defined as: */
+// #define ALL_QUIET send_channel_mode(123, 0)	/* all_notes_off */
 
 /*
  * 31.25 kbaud, one start bit, eight data bits, two stop bits.
@@ -83,47 +82,47 @@ struct track {
 sig_atomic_t sigio_count;
 struct sigaction sigio_sa;
 
-enum {
-	REPEAT_SHUFFLE = -2,
-	REPEAT_ALL = -1,
-	REPEAT_NONE = 0,
-	REPEAT_CURRENT = 1
+enum repeat_type {
+	REPEAT_SHUFFLE,
+	REPEAT_ALL,
+	REPEAT_NONE,
+	REPEAT_CURRENT
 };
 
-static snd_seq_t *seq;
-static int client;
-static int port_count;
+static snd_seq_t      *seq;
+static int             client;
+static int             port_count;
 static snd_seq_addr_t *ports;
-static int queue;
-static int end_delay = 2;
-static const char *file_name;
-static int file_index = -1;
-static int file_index_increment = 0;	// 0=standard to next file without skipping
-static int file_count = 0;
-static int repeat_type = REPEAT_NONE;
-static FILE *file;
-static int file_offset;		/* current offset in input file */
-static int num_tracks;
-static struct track *tracks = NULL;
-static int smpte_timing;
-static int ppq;
-static int original_tempo;
-static int tempo;
-static int tempo_percentage;
-static int delta_time;
+static int             queue;
+static int             end_delay               = 2;
+static const char     *file_name;
+static int             file_index              = -1;
+static int             file_index_increment    = 0;
+static int             file_count              = 0;
+static enum            repeat_type repeat_type = REPEAT_NONE;
+static FILE           *file;
+static int             file_offset; /* current offset in input file */
+static int             num_tracks;
+static struct track   *tracks                  = NULL;
+static int             smpte_timing;
+static int             ppq;
+static int             original_tempo;
+static int             tempo;
+static int             tempo_percentage;
+static int             delta_time;
 static struct termios *tio;
-static int num_channels;
-static int max_tick;
-static int verbosity;
-static int start_seek;
-static long long time_from_start; //(seconds)
-static long long max_time;		//(seconds)
-static int max_time_s;		//max time minutes
-static int max_time_m;		//max time seconds
-static long long time_passed;
-static struct track *tempo_track = NULL;
-static int redirect_channel = -1;
-static char no_pgmchange = 0;
+static int             num_channels;
+static int             max_tick;
+static int             verbosity;
+static int             start_seek;
+static long long       time_from_start; /* in seconds */
+static long long       max_time;        /* in seconds */
+static int             max_time_s;      /* max time seconds */
+static int             max_time_m;      /* max time minutes */
+static long long       time_passed;
+static struct track   *tempo_track             = NULL;
+static int             redirect_channel        = -1;
+static char            no_pgmchange            = 0;
 
 static void interactiveUsage(void);
 
@@ -132,7 +131,7 @@ int verbprintf(int required_verbosity , char* s, ...)
 	int ret = 1;
 	va_list args;
 	va_start (args, s);
-	if ( verbosity >= required_verbosity )
+	if (verbosity >= required_verbosity)
 		vprintf(s, args);
 	else ret = 0;
 	va_end(args);
@@ -142,7 +141,6 @@ int verbprintf(int required_verbosity , char* s, ...)
 void unbuffer_stdin()
 {
 	struct termios new_tio;
-	//unsigned char c;
 
 	/* get the terminal settings for stdin */
 	tcgetattr(STDIN_FILENO,tio);
@@ -167,32 +165,24 @@ void unblock_stdin()
 {
 	fcntl(0, F_SETFL, O_NONBLOCK);
 }
+
 void block_stdin()
 {
 	fcntl(0, F_SETFL, O_ASYNC);
 }
 
-void quit(int q)
+static void quit(int q)
 {
 	snd_seq_event_t ev;
 	snd_seq_ev_set_queue_stop(&ev, queue);
 	ALL_QUIET;
 	snd_seq_close(seq);
-	//put terminal back to normal:
+
+	/* Put terminal back to normal: */
 	rebuffer_stdin();
 	block_stdin();
+
 	exit(q);
-}
-
-/* prints an error message to stderr */
-static void errormsg(const char *msg, ...)
-{
-	va_list ap;
-
-	va_start(ap, msg);
-	vfprintf(stderr, msg, ap);
-	va_end(ap);
-	fputc('\n', stderr);
 }
 
 /* prints an error message to stderr, and dies */
@@ -204,15 +194,8 @@ static void fatal(const char *msg, ...)
 	vfprintf(stderr, msg, ap);
 	va_end(ap);
 	fputc('\n', stderr);
-	quit(EXIT_FAILURE);
-	//exit(EXIT_FAILURE);
-}
 
-/* memory allocation error handling */
-static void check_mem(void *p)
-{
-	if (!p)
-		fatal("Out of memory");
+	quit(EXIT_FAILURE);
 }
 
 /* error handling for ALSA functions */
@@ -220,6 +203,53 @@ static void check_snd(const char *operation, int err)
 {
 	if (err < 0)
 		fatal("Cannot %s - %s", operation, snd_strerror(err));
+}
+
+static int send_channel_mode(int param, int value)
+{
+	int i, j, err;
+	//wait for all notes to be played:
+	err = snd_seq_sync_output_queue(seq);
+	check_snd("sync output", err);
+
+	snd_seq_event_t ev;
+	snd_seq_ev_clear(&ev);
+	snd_seq_ev_set_direct(&ev);
+	ev.source.port = 0;
+
+	/* XXX WHAT ABOUT OTHER PORTS? */
+	ev.type = SND_SEQ_EVENT_CONTROLLER;
+	ev.data.control.param = param;
+	ev.data.control.value = value;
+	for (j=0; j < port_count; j++)
+	{
+		ev.dest = ports[j];
+		for (i=0; i < num_channels; i++)
+		{
+			ev.data.control.channel = i;
+			/* FIXME: NO ERROR CHECK. */
+			snd_seq_event_output_direct(seq, &ev);
+		}
+	}
+	return 1;
+}
+
+/* Prints an error message to stderr. */
+static void errormsg(const char *msg, ...)
+{
+	va_list ap;
+
+	va_start(ap, msg);
+	vfprintf(stderr, msg, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
+/* Memory allocation error handling. */
+static void check_mem(void *p)
+{
+	if (!p)
+		fatal("Out of memory");
 }
 
 static void init_seq(void)
@@ -239,7 +269,7 @@ static void init_seq(void)
 	check_snd("get client id", client);
 }
 
-/* parses one or more port addresses from the string */
+/* Parses one or more port addresses from the string. */
 static void parse_ports(const char *arg)
 {
 	char *buf, *s, *port_name;
@@ -309,10 +339,12 @@ static void connect_ports(void)
 	 * event.
 	 */
 	for (i = 0; i < port_count; ++i) {
-		err = snd_seq_connect_to(seq, 0, ports[i].client, ports[i].port);
+		err = snd_seq_connect_to(seq, 0, ports[i].client,
+					 ports[i].port);
 		if (err < 0)
 			fatal("Cannot connect to port %d:%d - %s",
-			      ports[i].client, ports[i].port, snd_strerror(err));
+			      ports[i].client, ports[i].port,
+			      snd_strerror(err));
 	}
 }
 
@@ -322,7 +354,7 @@ static int read_byte(void)
 	return getc(file);
 }
 
-/* reads a little-endian 32-bit integer */
+/* Reads a little-endian 32-bit integer. */
 static int read_32_le(void)
 {
 	int value;
@@ -333,7 +365,7 @@ static int read_32_le(void)
 	return !feof(file) ? value : -1;
 }
 
-/* reads a 4-character identifier */
+/* Reads a 4-character identifier. */
 static int read_id(void)
 {
 	return read_32_le();
@@ -341,7 +373,7 @@ static int read_id(void)
 
 #define MAKE_ID(c1, c2, c3, c4) ((c1) | ((c2) << 8) | ((c3) << 16) | ((c4) << 24))
 
-/* reads a fixed-size big-endian number */
+/* Reads a fixed-size big-endian number. */
 static int read_int(int bytes)
 {
 	int c, value = 0;
@@ -355,7 +387,7 @@ static int read_int(int bytes)
 	return value;
 }
 
-/* reads a variable-length number */
+/* Reads a variable-length number. */
 static int read_var(void)
 {
 	int value, c;
@@ -379,7 +411,7 @@ static int read_var(void)
 	return !feof(file) ? value : -1;
 }
 
-/* allocates a new event */
+/* Allocates a new event. */
 static struct event *new_event(struct track *track, int sysex_length)
 {
 	struct event *event;
@@ -406,7 +438,7 @@ static void skip(int bytes)
 		read_byte(), --bytes;
 }
 
-/* reads one complete track from the file */
+/* Reads one complete track from the file. */
 static int read_track(struct track *track, int track_end)
 {
 	int tick = 0;
@@ -568,13 +600,13 @@ _error:
 	return 0;
 }
 
-/* reads an entire MIDI file */
+/* Reads an entire MIDI file. */
 static int read_smf(void)
 {
 	int header_len, type, time_division, i, err;
 	snd_seq_queue_tempo_t *queue_tempo;
 
-	/* the curren position is immediately after the "MThd" id */
+	/* the current position is immediately after the "MThd" id */
 	header_len = read_int(4);
 	if (header_len < 6) {
 invalid_format:
@@ -584,17 +616,19 @@ invalid_format:
 
 	type = read_int(2);
 	if (type != 0 && type != 1) {
-		errormsg("%s: type %d format is not supported", file_name, type);
+		errormsg("%s: type %d format is not supported", file_name,
+			 type);
 		return 0;
 	}
 
 	num_tracks = read_int(2);
 	if (num_tracks < 1 || num_tracks > 1000) {
-		errormsg("%s: invalid number of tracks (%d)", file_name, num_tracks);
+		errormsg("%s: invalid number of tracks (%d)", file_name,
+			 num_tracks);
 		num_tracks = 0;
 		return 0;
 	}
-	tempo_track = malloc( sizeof(struct track) );
+	tempo_track = malloc(sizeof(struct track));
 	tracks = calloc(num_tracks, sizeof(struct track));
 	if (!tracks || !tempo_track) {
 		errormsg("out of memory");
@@ -614,7 +648,8 @@ invalid_format:
 	if (!smpte_timing) {
 		/* time_division is ticks per quarter */
 		original_tempo = 500000;
-		snd_seq_queue_tempo_set_tempo(queue_tempo, 500000); /* default: 120 bpm */
+		/* default: 120 bpm */
+		snd_seq_queue_tempo_set_tempo(queue_tempo, 500000);
 		snd_seq_queue_tempo_set_ppq(queue_tempo, time_division);
 	} else {
 		/* upper byte is negative frames per second */
@@ -626,22 +661,26 @@ invalid_format:
 		case 24:
 			original_tempo = 500000;
 			snd_seq_queue_tempo_set_tempo(queue_tempo, 500000);
-			snd_seq_queue_tempo_set_ppq(queue_tempo, 12 * time_division);
+			snd_seq_queue_tempo_set_ppq(queue_tempo,
+						    12 * time_division);
 			break;
 		case 25:
 			original_tempo = 400000;
 			snd_seq_queue_tempo_set_tempo(queue_tempo, 400000);
-			snd_seq_queue_tempo_set_ppq(queue_tempo, 10 * time_division);
+			snd_seq_queue_tempo_set_ppq(queue_tempo,
+						    10 * time_division);
 			break;
 		case 29: /* 30 drop-frame */
 			original_tempo = 100000000;
 			snd_seq_queue_tempo_set_tempo(queue_tempo, 100000000);
-			snd_seq_queue_tempo_set_ppq(queue_tempo, 2997 * time_division);
+			snd_seq_queue_tempo_set_ppq(queue_tempo,
+						    2997 * time_division);
 			break;
 		case 30:
 			original_tempo = 500000;
 			snd_seq_queue_tempo_set_tempo(queue_tempo, 500000);
-			snd_seq_queue_tempo_set_ppq(queue_tempo, 15 * time_division);
+			snd_seq_queue_tempo_set_ppq(queue_tempo,
+						    15 * time_division);
 			break;
 		default:
 			errormsg("%s: invalid number of SMPTE frames per second (%d)",
@@ -668,11 +707,13 @@ invalid_format:
 			int id = read_id();
 			len = read_int(4);
 			if (feof(file)) {
-				errormsg("%s: unexpected end of file", file_name);
+				errormsg("%s: unexpected end of file",
+					 file_name);
 				return 0;
 			}
 			if (len < 0 || len >= 0x10000000) {
-				errormsg("%s: invalid chunk length %d", file_name, len);
+				errormsg("%s: invalid chunk length %d",
+					 file_name, len);
 				return 0;
 			}
 			if (id == MAKE_ID('M', 'T', 'r', 'k'))
@@ -736,15 +777,13 @@ static void cleanup_file_data(void)
 
 	for (i = 0; i < num_tracks; ++i)
 		free_event_list(tracks[i].first_event);
-	if (tempo_track != NULL)
-	{
+	if (tempo_track != NULL) {
 		free_event_list(tempo_track->first_event);
 		free(tempo_track);
 		tempo_track = NULL;
 	}
 	num_tracks = 0;
-	if (tracks != NULL)
-	{
+	if (tracks != NULL) {
 		free(tracks);
 		tracks = NULL;
 	}
@@ -784,7 +823,6 @@ static void handle_big_sysex(snd_seq_event_t *ev)
 
 void set_tempo(snd_seq_event_t *ev, int new_tempo)
 {
-//Don't forget to snd_seq_event_output() or change will not be applied!
 	snd_seq_ev_set_fixed(ev);
 	ev->type = SND_SEQ_EVENT_TEMPO;
 	ev->dest.client = SND_SEQ_CLIENT_SYSTEM;
@@ -793,13 +831,16 @@ void set_tempo(snd_seq_event_t *ev, int new_tempo)
 	ev->data.queue.param.value = new_tempo;
 	tempo = new_tempo;
 	delta_time = tempo / ppq;
-	//dprintf("\nTEMPO: %d\n", ev->data.queue.param.value);
-	if ( verbosity >= 2 ) printf("original tempo: %dbpm | play tempo: %d%% => %dbpm\n",
-		60000000/original_tempo, tempo_percentage, 60000000/tempo);
+	if (verbosity >= 2)
+		printf("original tempo: %dbpm | play tempo: %d%% => %dbpm\n",
+		       60000000 / original_tempo, tempo_percentage,
+		       60000000 / tempo);
 }
 
 int set_tempo_direct(int new_tempo)
 {
+	/* FIXME: refactor with 'set_tempo'. */
+
 	snd_seq_event_t ev;
 	snd_seq_ev_clear(&ev);
 	snd_seq_ev_set_direct(&ev);
@@ -811,49 +852,21 @@ int set_tempo_direct(int new_tempo)
 	ev.data.queue.param.value = new_tempo;
 	tempo = new_tempo;
 	delta_time = tempo / ppq;
-	//dprintf("TEMPO: %d\n", ev->data.queue.param.value);
-	if ( verbosity >= 1 ) printf("original tempo: %dbpm | play tempo: %d%% => %dbpm\n",
-		60000000/original_tempo, tempo_percentage, 60000000/tempo);
+	if (verbosity >= 1)
+		printf("original tempo: %dbpm | play tempo: %d%% => %dbpm\n",
+		       60000000 / original_tempo, tempo_percentage,
+		       60000000 / tempo);
 	return snd_seq_event_output_direct(seq, &ev);
 }
 
 int set_tempo_percentage(int percent)
 {
-	if ( percent > 0 )
-	{
+	if (percent > 0) {
 		tempo_percentage = percent;
 		return 1;
+	} else {
+		return 0;
 	}
-	else return 0;
-}
-
-int send_channel_mode(int param, int value)
-{
-	int i, j, err;
-	//wait for all notes to be played:
-	err = snd_seq_sync_output_queue(seq);
-	check_snd("sync output", err);
-
-	snd_seq_event_t ev;
-	snd_seq_ev_clear(&ev);
-	snd_seq_ev_set_direct(&ev);
-	ev.source.port = 0;
-	//!!! WHAT ABOUT OTHER PORTS?:
-	ev.type = SND_SEQ_EVENT_CONTROLLER;
-	//All notes off:
-	ev.data.control.param = param;
-	ev.data.control.value = value;
-	for (j=0; j < port_count; j++)
-	{
-		ev.dest = ports[j];
-		for (i=0; i < num_channels; i++)
-		{
-			ev.data.control.channel = i;
-			//!!! NO ERROR CHECK :
-			snd_seq_event_output_direct(seq, &ev);
-		}
-	}
-	return 1;
 }
 
 long long time_of_tick(int tick)
@@ -862,12 +875,11 @@ long long time_of_tick(int tick)
 	int previous_event_tick = 0;
 	long long previous_tempo = original_tempo;
 	long long total_time = 0;
-	while ( 1 )
-	{
+	while (1) {
 		total_time += previous_tempo * (event->tick - previous_event_tick);
-		if ( !(event->next) || ((int)(event->next->tick) >= tick) )
-		{
-			total_time += (long long)(event->data.tempo) * (tick - event->tick);
+		if (!event->next || (int)event->next->tick >= tick) {
+			total_time += (long long)event->data.tempo
+				    * tick - event->tick;
 			break;
 		}
 		previous_event_tick = event->tick;
@@ -876,185 +888,192 @@ long long time_of_tick(int tick)
 	}
 	total_time /= ppq;
 	total_time /= (float)tempo_percentage * 0.01;
-	return total_time; //(microseconds)
+	return total_time; /* microseconds */
 }
 
 void make_event_from(struct event *event, snd_seq_event_t *ev)
 {
 	ev->type = event->type;
 	ev->time.tick = event->tick;
-	//dprintf("%d ",ev->time.tick);
-	if (verbosity >= 4)
+	if (verbosity >= 4) {
 		printf("tick: %d\t/ %d| ", ev->time.tick, max_tick);
-	else if (verbosity == 3 || verbosity == 2 || verbosity == 1)
-	{
-		//puts("       ");
-		if ( verbosity == 2 || verbosity == 1 ) //save cursor position
+	} else if (verbosity == 3 || verbosity == 2 || verbosity == 1) {
+		if (verbosity == 2 || verbosity == 1) {
+			/* save cursor position */
 			printf("\0337");
+		}
 
-		int total_seconds = (time_passed/1000000);
+		int total_seconds = time_passed/1000000;
 		int minutes = total_seconds / 60;
 		int seconds = total_seconds % 60;
-		if ( minutes < 10 ) 	printf("0%d:", minutes);
-		else 					printf("%d:", minutes);
-		if ( seconds < 10 ) 	printf("0%d / ", seconds);
-		else 					printf("%d / ", seconds);
-		if ( max_time_m < 10 ) 	printf("0%d:", max_time_m);
-		else					printf("%d:", max_time_m);
-		if ( max_time_s < 10 ) 	printf("0%d", max_time_s);
-		else 					printf("%d", max_time_s );
 
-		if ( verbosity == 2 || verbosity == 1 ) //restore cursor position
+		if (minutes < 10)
+			printf("0%d:", minutes);
+		else
+			printf("%d:", minutes);
+
+		if (seconds < 10)
+			printf("0%d / ", seconds);
+		else
+			printf("%d / ", seconds);
+
+		if (max_time_m < 10)
+			printf("0%d:", max_time_m);
+		else
+			printf("%d:", max_time_m);
+
+		if (max_time_s < 10)
+			printf("0%d", max_time_s);
+		else
+			printf("%d", max_time_s );
+
+		if (verbosity == 2 || verbosity == 1) {
+			/* restore cursor position */
 			printf("\0338");
-		else printf(" | ");
+		} else {
+			printf(" | ");
+		}
 	}
 	ev->dest = ports[event->port];
-	switch (ev->type)
-	{
-		case SND_SEQ_EVENT_NOTEON:
-		case SND_SEQ_EVENT_NOTEOFF:
-		case SND_SEQ_EVENT_KEYPRESS:
-			snd_seq_ev_set_fixed(ev);
-			ev->data.note.channel = event->data.d[0];
-			ev->data.note.note = event->data.d[1];
-			ev->data.note.velocity = event->data.d[2];
-			if ( verbosity >= 3 ) printf("ch:%d\t| note:%d\t| vel:%d\n",
-				ev->data.note.channel,
-				ev->data.note.note, ev->data.note.velocity);
+	switch (ev->type) {
+	case SND_SEQ_EVENT_NOTEON:
+	case SND_SEQ_EVENT_NOTEOFF:
+	case SND_SEQ_EVENT_KEYPRESS:
+		snd_seq_ev_set_fixed(ev);
+		ev->data.note.channel = event->data.d[0];
+		ev->data.note.note = event->data.d[1];
+		ev->data.note.velocity = event->data.d[2];
+		if (verbosity >= 3)
+			printf("ch:%d\t| note:%d\t| vel:%d\n",
+			       ev->data.note.channel,
+			       ev->data.note.note, ev->data.note.velocity);
+		break;
+	case SND_SEQ_EVENT_CONTROLLER:
+		snd_seq_ev_set_fixed(ev);
+		ev->data.control.channel = event->data.d[0];
+		ev->data.control.param = event->data.d[1];
+		ev->data.control.value = event->data.d[2];
+		if (verbosity >= 3)
+			printf("ch:%d\t| ctrl:%d\t| val:%d\n",
+			       ev->data.control.channel,
+			       ev->data.control.param, ev->data.control.value);
+		break;
+	case SND_SEQ_EVENT_PGMCHANGE:
+	case SND_SEQ_EVENT_CHANPRESS:
+		if (no_pgmchange) {
+			ev->type = SND_SEQ_EVENT_NONE;
 			break;
-		case SND_SEQ_EVENT_CONTROLLER:
-			snd_seq_ev_set_fixed(ev);
-			ev->data.control.channel = event->data.d[0];
-			ev->data.control.param = event->data.d[1];
-			ev->data.control.value = event->data.d[2];
-			if ( verbosity >= 3 ) printf("ch:%d\t| ctrl:%d\t| val:%d\n",
-				ev->data.control.channel,
-				ev->data.control.param, ev->data.control.value);
-			break;
-		case SND_SEQ_EVENT_PGMCHANGE:
-		case SND_SEQ_EVENT_CHANPRESS:
-			if (no_pgmchange) 
-			{
-				ev->type = SND_SEQ_EVENT_NONE;
-				break;
-			}
-			snd_seq_ev_set_fixed(ev);
-			ev->data.control.channel = event->data.d[0];
-			ev->data.control.value = event->data.d[1];
-			if ( verbosity >= 3 ) printf("ch:%d\t| prog change:%d\n",
-				ev->data.control.channel, ev->data.control.value);
-			break;
-		case SND_SEQ_EVENT_PITCHBEND:
-			snd_seq_ev_set_fixed(ev);
-			ev->data.control.channel = event->data.d[0];
-			ev->data.control.value =
-				((event->data.d[1]) |
-				 ((event->data.d[2]) << 7)) - 0x2000;
-			if ( verbosity >= 3 ) printf("ch:%d\t| pitchbend:%d\n",
-				ev->data.control.channel, ev->data.control.value);
-			break;
-		case SND_SEQ_EVENT_SYSEX:
-			snd_seq_ev_set_variable(ev, event->data.length,
-						event->sysex);
-			handle_big_sysex(ev);
-			if ( verbosity >= 3 ) printf("sysex\n");
-			break;
-		case SND_SEQ_EVENT_TEMPO:
-			original_tempo = event->data.tempo;
-			tempo = original_tempo * (100.0/(float)tempo_percentage);
-			set_tempo(ev, tempo);
-			break;
-		default:
-			fatal("Invalid event type %d!", ev->type);
+		}
+		snd_seq_ev_set_fixed(ev);
+		ev->data.control.channel = event->data.d[0];
+		ev->data.control.value = event->data.d[1];
+		if (verbosity >= 3)
+			printf("ch:%d\t| prog change:%d\n",
+			       ev->data.control.channel,
+			       ev->data.control.value);
+		break;
+	case SND_SEQ_EVENT_PITCHBEND:
+		snd_seq_ev_set_fixed(ev);
+		ev->data.control.channel = event->data.d[0];
+		ev->data.control.value =
+			((event->data.d[1]) |
+			 ((event->data.d[2]) << 7)) - 0x2000;
+		if (verbosity >= 3)
+			printf("ch:%d\t| pitchbend:%d\n",
+			       ev->data.control.channel,
+			       ev->data.control.value);
+		break;
+	case SND_SEQ_EVENT_SYSEX:
+		snd_seq_ev_set_variable(ev, event->data.length,
+					event->sysex);
+		handle_big_sysex(ev);
+		if (verbosity >= 3)
+			printf("sysex\n");
+		break;
+	case SND_SEQ_EVENT_TEMPO:
+		original_tempo = event->data.tempo;
+		tempo = original_tempo * (100.0 / (float)tempo_percentage);
+		set_tempo(ev, tempo);
+		break;
+	default:
+		fatal("Invalid event type %d!", ev->type);
 	}
 }
 
+/* Returns new tick. */
 int midi_seek(int ticks, int actual_tick)
 {
-//returns new tick
 	int i, err;
-	unsigned int min_tick = 0; // max_tick+1;
+	unsigned int min_tick = 0;
 	unsigned int previous_event_tick = 0;
-	//int actual_tick = event->tick;
 	struct track *track;
 	snd_seq_event_t ev_direct;
 	snd_seq_ev_clear(&ev_direct);
 	snd_seq_ev_set_direct(&ev_direct);
 
-	//We don't want to print all the events if verbosity is only at 2 or 3:
+	/* We don't want to print all the events if verbosity is only 2 or 3: */
 	int backup_verbosity = verbosity;
-	if ( verbosity == 3 || verbosity == 2 )
+	if (verbosity == 3 || verbosity == 2)
 		verbosity = 1;
 
-	if (ticks > 0)
-	{
-		for (i=0; i < num_tracks; i++)
-		{
+	if (ticks > 0) {
+		for (i=0; i < num_tracks; i++) {
 			track = &tracks[i];
-			if ( track->current_event )
-			{
-				while ( ((int)(track->current_event->tick) - (int)actual_tick) < ticks )
-				{
-					switch ( track->current_event->type )
-					{
-						case SND_SEQ_EVENT_NOTEON:
-						case SND_SEQ_EVENT_NOTEOFF:
-						case SND_SEQ_EVENT_KEYPRESS:
-							break;
-						default:
-							make_event_from(track->current_event, &ev_direct);
-							snd_seq_event_output_direct(seq, &ev_direct);
+			if (track->current_event) {
+				while ((int)track->current_event->tick
+				     - (int)actual_tick
+				     < ticks) {
+					switch (track->current_event->type) {
+					case SND_SEQ_EVENT_NOTEON:
+					case SND_SEQ_EVENT_NOTEOFF:
+					case SND_SEQ_EVENT_KEYPRESS:
+						break;
+					default:
+						make_event_from(track->current_event, &ev_direct);
+						snd_seq_event_output_direct(seq, &ev_direct);
 					}
 					previous_event_tick = track->current_event->tick;
-					//if ( track->current_event->next )
-					//{
 					track->current_event = track->current_event->next;
-					//}
-					if ( !(track->current_event) ) break;
+					if (!track->current_event)
+						break;
 				}
-				if ( previous_event_tick > min_tick )
+				if (previous_event_tick > min_tick)
 					min_tick = previous_event_tick;
 			}
 		}
-	}
-	else
-	{
-		//We replay all the file from the beginning because we want
-		//to take into account events like tempo change or program change
+	} else {
+		/* We replay the whole file from the beginning because we want
+		 * to take into account events like tempo change or program
+		 * change. FIXME: This is horrible. */
 		struct event *cursor;
-		for (i=0; i < num_tracks; i++)
-		{
+		for (i=0; i < num_tracks; i++) {
 			cursor = tracks[i].first_event;
 			track = &tracks[i];
-			if ( cursor ) //(don't really need this check)
-			{
-				while ( (int)actual_tick > (int)(cursor->tick) - ticks )
-				{
-					switch ( cursor->type )
-					{
-						case SND_SEQ_EVENT_NOTEON:
-						case SND_SEQ_EVENT_NOTEOFF:
-						case SND_SEQ_EVENT_KEYPRESS:
-							break;
-						default:
-							make_event_from(cursor, &ev_direct);
-							snd_seq_event_output_direct(seq, &ev_direct);
+			if (cursor) /* FIXME: don't really need this check. */ {
+				while ((int)actual_tick
+				     > (int)cursor->tick - ticks) {
+					switch ( cursor->type ) {
+					case SND_SEQ_EVENT_NOTEON:
+					case SND_SEQ_EVENT_NOTEOFF:
+					case SND_SEQ_EVENT_KEYPRESS:
+						break;
+					default:
+						make_event_from(cursor, &ev_direct);
+						snd_seq_event_output_direct(seq, &ev_direct);
 					}
-					//old_cursor = cursor;
 					previous_event_tick = cursor->tick;
 					cursor = cursor->next;
-					if ( !(cursor) )
-					{
-						//old_cursor = NULL;
+					if ( !(cursor) ) {
 						break;
 					}
 				}
 				track->current_event = cursor;
-				if ( previous_event_tick > min_tick )
-					min_tick = previous_event_tick; //track->current_event->tick;
+				if (previous_event_tick > min_tick)
+					min_tick = previous_event_tick;
 			}
 		}
 	}
+
 	snd_seq_ev_set_queue_pos_tick(&ev_direct, queue, min_tick);
 	err = snd_seq_event_output_direct(seq, &ev_direct);
 	check_snd("output event", err);
@@ -1067,23 +1086,23 @@ int midi_seek(int ticks, int actual_tick)
 static void play_midi(void)
 {
 	snd_seq_event_t ev, ev_direct;
-	//int backup_verbosity = verbosity;
 	int i, err;
 	int ch;
 	int old_ev_tick = 0;
-	struct track *track, *longest_track;
+	struct track *track, *longest_track = NULL;
 	struct event *event = NULL;
 	delta_time = tempo / ppq;
-	time_passed = 0; //(microseconds)
+	time_passed = 0; /* microseconds */
 
+	if (num_tracks == 0) {
+		fatal("Number of tracks is 0");
+	}
 
 	/* calculate length of the entire file */
 	time_from_start = 0;
 	max_tick = -1;
-	for (i = 0; i < num_tracks; ++i)
-	{
-		if (tracks[i].end_tick > max_tick)
-		{
+	for (i = 0; i < num_tracks; ++i) {
+		if (tracks[i].end_tick > max_tick) {
 			max_tick = tracks[i].end_tick;
 			longest_track = &tracks[i];
 		}
@@ -1118,8 +1137,7 @@ static void play_midi(void)
 	old_ev_tick = midi_seek(start_seek, 0);
 	time_passed = time_of_tick(old_ev_tick);
 
-	for (;;)
-	{
+	for (;;) {
 		struct track* event_track = NULL;
 		int i;
 		unsigned int min_tick = max_tick + 1;
@@ -1152,167 +1170,169 @@ static void play_midi(void)
 
 		make_event_from(event, &ev);
 
-		//!!! THERE MUST BE A BETTER WAY:
+		/* XXX THERE MUST BE A BETTER WAY: */
 		err = snd_seq_event_output(seq, &ev);
 		check_snd("output event", err);
 		err = snd_seq_drain_output(seq);
 		check_snd("output event", err);
 
-		#ifdef DEBUG
-		  if ( sigio_count > 0 ) fprintf(stderr, "\n\nsigio_count = %d\n\n", sigio_count);
-		#endif
-
 		ch = getc(stdin);
-		if ( ch != EOF )
-		{
-			switch (ch)
-			{
-				//PAUSE:
-				case ' ':
-					if ( verbosity >= 3 ) printf("\nPAUSE\n");
-					if ( verbosity == 2 ) printf("\033[20CPAUSE");
-					block_stdin();
-					ALL_QUIET;
-					getc(stdin);
-					unblock_stdin();
-					if ( verbosity == 2 ) printf("\033[1K\033[25D");
-					snd_seq_event_t ev_direct;
-					memset(&ev_direct, 0, sizeof(snd_seq_event_t));
-					snd_seq_ev_set_queue_pos_tick(&ev_direct, queue, old_ev_tick);
-					snd_seq_event_output_direct(seq, &ev_direct);
+		if (ch != EOF) {
+			switch (ch) {
+			/* PAUSE: */
+			case ' ':
+				if (verbosity >= 3)
+					printf("\nPAUSE\n");
+				if (verbosity == 2)
+					printf("\033[20CPAUSE");
+				block_stdin();
+				ALL_QUIET;
+				getc(stdin);
+				unblock_stdin();
+				if (verbosity == 2)
+					printf("\033[1K\033[25D");
+				snd_seq_event_t ev_direct;
+				memset(&ev_direct, 0, sizeof(snd_seq_event_t));
+				snd_seq_ev_set_queue_pos_tick(&ev_direct, queue, old_ev_tick);
+				snd_seq_event_output_direct(seq, &ev_direct);
+				break;
+			/* TEMPO +: */
+			case '>':
+				if (!(set_tempo_percentage(tempo_percentage + 1))) {
+					if (verbosity >= 1)
+						printf("can't set tempo percentage (too high)\n");
+				}
+				else if ( original_tempo > 0 ) {
+					err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
+					check_snd("output event", err);
+				}
+				goto tempo_change;
+			/* TEMPO =: */
+			case '=':
+				if (!(set_tempo_percentage(100))) {
+					if (verbosity >= 1)
+						printf("can't set tempo percentage\n");
+				}
+				else if (original_tempo > 0) {
+					err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
+					check_snd("output event", err);
+				}
+				goto tempo_change;
+			/* TEMPO -: */
+			case '<':
+				if (!(set_tempo_percentage(tempo_percentage - 1))) {
+					if (verbosity >= 1)
+						printf("can't set tempo percentage (too low)\n");
+				}
+				else if (original_tempo > 0) {
+					err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
+					check_snd("output event", err);
+				}
+			tempo_change:
+				max_time = time_of_tick(longest_track->end_tick);
+				max_time_m = max_time / 60000000;
+				max_time_s = (max_time / 1000000) % 60;
+				time_passed = time_of_tick(old_ev_tick);
+				break;
+			/* FORWARD ~1000 ticks */
+			case 'f':
+				/* if playback has just started: */
+				if ( !event )
 					break;
-				//TEMPO +:
-				case '>':
-					//backup_verbosity = verbosity;
-					//if ( verbosity == 1 ) verbosity = 2;
-					if (!(set_tempo_percentage(tempo_percentage+1)))
-						{ if ( verbosity >= 1 ) printf("can't set tempo percentage (too high)"); }
-					else if ( original_tempo > 0 )
-					{
-						err = set_tempo_direct(original_tempo*(100.0/(float)tempo_percentage));
-						check_snd("output event", err);
-					}
-					goto tempo_change;
-				//TEMPO =:
-				case '=':
-					//backup_verbosity = verbosity;
-					//if ( verbosity == 1 ) verbosity = 2;
-					if (!(set_tempo_percentage(100)))
-					{
-						if ( verbosity >= 1 ) printf("can't set tempo percentage");
-					}
-					else if ( original_tempo > 0 )
-					{
-						err = set_tempo_direct(original_tempo*(100.0/(float)tempo_percentage));
-						check_snd("output event", err);
-					}
-					goto tempo_change;
-				//TEMPO -:
-				case '<':
-					//backup_verbosity = verbosity;
-					//if ( verbosity == 1 ) verbosity = 2;
-					if (!(set_tempo_percentage(tempo_percentage-1)))
-						{ if ( verbosity >= 1 ) printf("can't set tempo percentage (too low)"); }
-					else if ( original_tempo > 0 )
-					{
-						err = set_tempo_direct(original_tempo*(100.0/(float)tempo_percentage));
-						check_snd("output event", err);
-					}
-				tempo_change:
-					max_time = time_of_tick(longest_track->end_tick);
-					max_time_m = max_time / 60000000;
-					max_time_s = (max_time / 1000000) % 60;
-					time_passed = time_of_tick(old_ev_tick);
-					//verbosity = backup_verbosity;
+				/* else: */
+				old_ev_tick = midi_seek(1000, event->tick);
+				goto skip;
+			/* FORWARD ~10000 ticks */
+			case 'F':
+				/* if playback has just started: */
+				if (!event)
 					break;
-				//FORWARD ~1000 ticks
-				case 'f':
-					//if playback has just started:
-					if ( !(event) ) break;
-					//else:
-					old_ev_tick = midi_seek(1000, event->tick);
-					goto skip;
-				//FORWARD ~10000 ticks
-				case 'F':
-					//if playback has just started:
-					if ( !(event) ) break;
-					//else:
-					old_ev_tick = midi_seek(10000, event->tick);
-					goto skip;
-				//BEGINNING
-				case 'B':
-					if ( !(event) ) break;
-					old_ev_tick = midi_seek(start_seek, 0);
-					goto skip;
-				//PREVIOUS FILE
-				case 'P':
-					file_index_increment = -1;
-					goto change_file;
-				//NEXT FILE
-				case 'N':
-					file_index_increment = 1;
-				change_file:
-					if ( !(event) ) break;
-					old_ev_tick = midi_seek(max_tick, event->tick);
-					goto skip;
-				//REWIND ~1000 ticks:
-				case 'r':
-					old_ev_tick = midi_seek(-1000, event->tick);
-					goto skip;
-				//REWIND ~10000 ticks:
-				case 'R':
-					old_ev_tick = midi_seek(-10000, event->tick);
-				skip:
-					ALL_QUIET;
-					time_passed = time_of_tick(old_ev_tick);
+				/* else: */
+				old_ev_tick = midi_seek(10000, event->tick);
+				goto skip;
+			/* BEGINNING */
+			case 'B':
+				if (!event)
 					break;
-				//REPEAT: NONE
-				case ')':
-					repeat_type = REPEAT_NONE;
-					if (verbosity >= 3) printf("repeat: none\n");
+				old_ev_tick = midi_seek(start_seek, 0);
+				goto skip;
+			/* PREVIOUS FILE */
+			case 'P':
+				file_index_increment = -1;
+				goto change_file;
+			/* NEXT FILE */
+			case 'N':
+				file_index_increment = 1;
+			change_file:
+				if (!event)
 					break;
-				//REPEAT: CURRENT
-				case '!':
-					repeat_type = REPEAT_CURRENT;
-					if (verbosity >= 3) printf("repeat: current\n");
-					break;
-				//REPEAT: ALL
-				case '*':
-					repeat_type = REPEAT_ALL;
-					if (verbosity >= 3) printf("repeat: all\n");
-					break;
-				//REPEAT: SHUFFLE
-				case '#':
-					repeat_type = REPEAT_SHUFFLE;
-					if (verbosity >= 3) printf("repeat: shuffle\n");
-					break;
-				//HELP:
-				case 'h':
-					interactiveUsage();
-					break;
-				//QUIT:
-				case 'q':
-					quit(0);
-					break;
-				//VERBOSITY -:
-				case 'v':
-					if ( verbosity > 0 )
-						verbosity--;
-					if ( verbosity >= 0 ) printf("verbosity : %d\n", verbosity);
-					break;
-				//VERBOSITY +:
-				case 'V':
-					if (verbosity < VERBOSE_MAX)
-						verbosity++;
-					if ( verbosity >= 1 ) printf("verbosity : %d\n", verbosity);
-					break;
-				default:
-					if ( verbosity >= 1 ) printf("unrecognized command: '%c'\n", ch);
-					break;
+				old_ev_tick = midi_seek(max_tick, event->tick);
+				goto skip;
+			/* REWIND ~1000 ticks: */
+			case 'r':
+				old_ev_tick = midi_seek(-1000, event->tick);
+				goto skip;
+			/* REWIND ~10000 ticks: */
+			case 'R':
+				old_ev_tick = midi_seek(-10000, event->tick);
+			skip:
+				ALL_QUIET;
+				time_passed = time_of_tick(old_ev_tick);
+				break;
+			/* REPEAT: NONE */
+			case ')':
+				repeat_type = REPEAT_NONE;
+				if (verbosity >= 3)
+					printf("repeat: none\n");
+				break;
+			/* REPEAT: CURRENT */
+			case '!':
+				repeat_type = REPEAT_CURRENT;
+				if (verbosity >= 3)
+					printf("repeat: current\n");
+				break;
+			/* REPEAT: ALL */
+			case '*':
+				repeat_type = REPEAT_ALL;
+				if (verbosity >= 3)
+					printf("repeat: all\n");
+				break;
+			/* REPEAT: SHUFFLE */
+			case '#':
+				repeat_type = REPEAT_SHUFFLE;
+				if (verbosity >= 3)
+					printf("repeat: shuffle\n");
+				break;
+			/* HELP: */
+			case 'h':
+				interactiveUsage();
+				break;
+			/* QUIT: */
+			case 'q':
+				quit(0);
+				break;
+			/* VERBOSITY -: */
+			case 'v':
+				if (verbosity > 0)
+					verbosity--;
+				if (verbosity >= 0)
+					printf("verbosity : %d\n", verbosity);
+				break;
+			/* VERBOSITY +: */
+			case 'V':
+				if (verbosity < VERBOSE_MAX)
+					verbosity++;
+				if (verbosity >= 1)
+					printf("verbosity : %d\n", verbosity);
+				break;
+			default:
+				if (verbosity >= 1)
+					printf("unrecognized command: '%c'\n",
+					       ch);
+				break;
 			}
 		}
 	}
-
 
 	/* schedule queue stop at end of song */
 	snd_seq_ev_set_fixed(&ev);
@@ -1350,11 +1370,9 @@ static void play_file(void)
 {
 	int ok;
 
-	if ( verbosity >= 2 )
-	{
+	if ( verbosity >= 2 ) {
 		printf("Playing ");
-		if (file_count > 1)
-		{
+		if (file_count > 1) {
 			printf("(%d/%d) ", (file_index + 1), file_count);
 		}
 		printf("\"%s\"\n", file_name);
@@ -1390,8 +1408,8 @@ static void play_file(void)
 		play_midi();
 
 	cleanup_file_data();
-	//If there are several files, only the first file will be
-	//concerned by the --seek (-s)  parameter:
+	/* If there are several files, only the first file will be
+	 * concerned by the --seek (-s)  parameter: */
 	start_seek = 0;
 }
 
@@ -1472,6 +1490,7 @@ static void version(void)
 
 void sigio_handler(int signal_number)
 {
+	(void)(signal_number);
 	sigio_count++;
 }
 
@@ -1556,7 +1575,8 @@ int main(int argc, char *argv[])
 			} else if (strcasecmp(optarg, "shuffle") == 0) {
 				repeat_type = REPEAT_SHUFFLE;
 			} else {
-				fprintf(stderr, "Invalid repeat type specified\n");
+				fprintf(stderr,
+					"Invalid repeat type specified\n");
 				return (1);
 			}
 			break;
@@ -1570,20 +1590,17 @@ int main(int argc, char *argv[])
 			no_pgmchange = 1;
 			break;
 		case 'T':
-			if ( set_tempo_percentage(atoi(optarg)) != 1 )
-			{
-				fprintf(stderr, "Tempo percentage must be >= 1\n");
+			if ( set_tempo_percentage(atoi(optarg)) != 1 ) {
+				fprintf(stderr,
+					"Tempo percentage must be >= 1\n");
 				return 1;
 			}
 			break;
 		case 'v':
 			verbosity = atoi(optarg);
-			if (verbosity < 0)
-			{
+			if (verbosity < 0) {
 				verbosity = 0;
-			}
-			else if (verbosity > VERBOSE_MAX)
-			{
+			} else if (verbosity > VERBOSE_MAX) {
 				verbosity = VERBOSE_MAX;
 			}
 			break;
@@ -1611,7 +1628,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 
-		//make terminal unbuffered and non-blocking:
+		/* make terminal unbuffered and non-blocking: */
 		tio = malloc(sizeof(struct termios));
 		unblock_stdin();
 		unbuffer_stdin();
@@ -1639,7 +1656,8 @@ int main(int argc, char *argv[])
 
 			switch (repeat_type) {
 			case REPEAT_NONE:
-				file_index += ((file_index_increment == 0) ? 1 : file_index_increment);
+				file_index += file_index_increment == 0
+					    ? 1 : file_index_increment;
 				if (file_index < 0)
 					file_index = 0;
 				break;
@@ -1649,13 +1667,14 @@ int main(int argc, char *argv[])
 					file_index = 0;
 				break;
 			case REPEAT_ALL:
-				file_index += ((file_index_increment == 0) ? 1 : file_index_increment);
-				if ((file_index < 0) || (file_index >= file_count))
+				file_index += file_index_increment == 0
+					    ? 1 : file_index_increment;
+				if (file_index < 0 || file_index >= file_count)
 					file_index = 0;
 				break;
 			case REPEAT_SHUFFLE:
 				if (file_count > 1) {
-					/* Choose a _different_ file at random. */
+					/* Choose a _different_ random file. */
 					long r = rand_under(file_count - 1);
 					file_index = r < file_index ? r : r + 1;
 				}
@@ -1663,9 +1682,9 @@ int main(int argc, char *argv[])
 			}
 			file_index_increment = 0;
 		}
-
 		quit(0);
 	}
+
 	snd_seq_close(seq);
 	return 0;
 }
