@@ -1,5 +1,6 @@
 LDLIBS := -lasound
 CFLAGS ?= -g -O2
+CFLAGS += -W -Wall
 DESTDIR ?= /usr/local
 bindir ?= /bin
 mandir ?= /share/man
