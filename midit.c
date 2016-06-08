@@ -1483,34 +1483,16 @@ void set_signals()
 	sigaction(SIGIO, &sigio_sa, NULL);
 }
 
-// Assumes 0 <= max <= RAND_MAX
-// Returns in the half-open interval [0, max]
-long random_at_most(long max)
+static int rand_under(int size)
 {
-	unsigned long
-		// max <= RAND_MAX < ULONG_MAX, so this is okay.
-		num_bins = (unsigned long) max + 1,
-		num_rand = (unsigned long) RAND_MAX + 1,
-		bin_size = num_rand / num_bins,
-		defect   = num_rand % num_bins;
-
-	long x;
-	do {
-		x = random();
-		// This is carefully written not to overflow
-	} while ((num_rand - defect) <= (unsigned long) x);
-
-	// Truncated division is intentional
-	return (x / bin_size);
+	return rand() % size;
 }
 
-long long current_timestamp(void)
+static unsigned int current_timestamp(void)
 {
 	struct timeval te;
-	gettimeofday(&te, NULL); // get current time
-	long long milliseconds = (te.tv_sec * 1000LL) + (te.tv_usec / 1000); // caculate milliseconds
-	// printf("milliseconds: %lld\n", milliseconds);
-	return (milliseconds);
+	gettimeofday(&te, NULL);
+	return te.tv_sec * 1000u + te.tv_usec / 1000u;
 }
 
 int main(int argc, char *argv[])
@@ -1541,7 +1523,7 @@ int main(int argc, char *argv[])
 	verbosity = 2;
 	start_seek = 0;
 
-	srandom(current_timestamp());
+	srand(current_timestamp());
 
 	while ((c = getopt_long(argc, argv, short_options,
 				long_options, NULL)) != -1) {
@@ -1647,7 +1629,7 @@ int main(int argc, char *argv[])
 				file_index = 0;
 				break;
 			case REPEAT_SHUFFLE:
-				file_index = random_at_most(file_count - 1);
+				file_index = rand_under(file_count);
 				break;
 			}
 		}
@@ -1673,10 +1655,9 @@ int main(int argc, char *argv[])
 				break;
 			case REPEAT_SHUFFLE:
 				if (file_count > 1) {
-					int new_index = file_index;
-					while (new_index == file_index)
-						new_index = random_at_most(file_count - 1);
-					file_index = new_index;
+					/* Choose a _different_ file at random. */
+					long r = rand_under(file_count - 1);
+					file_index = r < file_index ? r : r + 1;
 				}
 				break;
 			}
