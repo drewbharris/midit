@@ -124,8 +124,6 @@ static struct track   *tempo_track             = NULL;
 static int             redirect_channel        = -1;
 static char            no_pgmchange            = 0;
 
-static void interactiveUsage(void);
-
 int verbprintf(int required_verbosity , char* s, ...)
 {
 	int ret = 1;
@@ -1305,7 +1303,6 @@ static void play_midi(void)
 				break;
 			/* HELP: */
 			case 'h':
-				interactiveUsage();
 				break;
 			/* QUIT: */
 			case 'q':
@@ -1413,7 +1410,7 @@ static void play_file(void)
 	start_seek = 0;
 }
 
-static void list_ports(void)
+void list_ports(void)
 {
 	snd_seq_client_info_t *cinfo;
 	snd_seq_port_info_t *pinfo;
@@ -1448,46 +1445,6 @@ static void list_ports(void)
 	}
 }
 
-static void interactiveUsage(void)
-{
-	printf(
-		"Interactive Control\n"
-		"<space>                     Pause / play\n"
-		"> / = /<                    Increase / normal / decrease tempo\n"
-		"f / F                       Forward by approximately 1000 / 10000 ticks\n"
-		"r / R                       Rewind by approximately 1000 / 10000 ticks\n"
-		"v / V                       Decrease / increase verbosity\n"
-		"B / N / P                   Beginning of current file / next / previous file\n"
-		") / ! / * / #               Change repeat mode: none / current / all / shuffle\n"
-		"h                           This help\n"
-		"q                           Quit\n");
-}
-
-static void usage(const char *argv0)
-{
-	printf("Usage: %s -p client:port[,...] [-d delay] midifile ...\n", argv0);
-	printf(
-		"-h, --help                  this help\n"
-		"-V, --version               print current version\n"
-		"-l, --list                  list all possible output ports\n"
-		"-p, --port=client:port,...  set port(s) to play to\n"
-		"-d, --delay=seconds         delay after song ends\n"
-		"-i, --index=index           start file index\n"
-		"-r, --repeat=type           repeat type: none, current, all, or shuffle\n"
-		"-s, --seek=ticks            seek in ticks\n"
-		"-T, --tempo=n               tempo in percent\n"
-		"-v, --verbosity=n           verbosity from 0 to 10\n"
-		"-c, --channel=n             redirect to channel n (from 0 to 15)\n"
-		"-n, --no-pgmchange          disallow program changes\n"
-		"\n");
-	interactiveUsage();
-}
-
-static void version(void)
-{
-	puts("midit version " VERSION);
-}
-
 void sigio_handler(int signal_number)
 {
 	(void)(signal_number);
@@ -1512,179 +1469,4 @@ static unsigned int current_timestamp(void)
 	struct timeval te;
 	gettimeofday(&te, NULL);
 	return te.tv_sec * 1000u + te.tv_usec / 1000u;
-}
-
-int main(int argc, char *argv[])
-{
-	static const char short_options[] = "hVlp:d:i:r:s:T:v:c:n";
-	static const struct option long_options[] = {
-		{"help",		0,	NULL,	'h'},
-		{"version",		0,	NULL,	'V'},
-		{"list",		0,	NULL,	'l'},
-		{"port",		1,	NULL,	'p'},
-		{"delay",		1,	NULL,	'd'},
-		{"index",		1,	NULL,	'i'},
-		{"repeat",		1,	NULL,	'r'},
-		{"seek",		1,	NULL,	's'},
-		{"tempo",		1,	NULL,	'T'},
-		{"verbosity",		1,	NULL,	'v'},
-		{"channel",		1,	NULL,	'c'},
-		{"no-pgmchange",	0,	NULL,	'n'},
-		{0,0,0,0}
-	};
-	int c;
-	int do_list = 0;
-
-	set_signals();
-	init_seq();
-	tempo_percentage = 100;
-	num_channels = 16;
-	verbosity = 2;
-	start_seek = 0;
-
-	srand(current_timestamp());
-
-	while ((c = getopt_long(argc, argv, short_options,
-				long_options, NULL)) != -1) {
-		switch (c) {
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		case 'V':
-			version();
-			return 0;
-		case 'l':
-			do_list = 1;
-			break;
-		case 'p':
-			parse_ports(optarg);
-			break;
-		case 'd':
-			end_delay = atoi(optarg);
-			break;
-		case 'i':
-			file_index = atoi(optarg) - 1;
-			break;
-		case 'r':
-			if (strcasecmp(optarg, "none") == 0) {
-				repeat_type = REPEAT_NONE;
-			} else if (strcasecmp(optarg, "current") == 0) {
-				repeat_type = REPEAT_CURRENT;
-			} else if (strcasecmp(optarg, "all") == 0) {
-				repeat_type = REPEAT_ALL;
-			} else if (strcasecmp(optarg, "shuffle") == 0) {
-				repeat_type = REPEAT_SHUFFLE;
-			} else {
-				fprintf(stderr,
-					"Invalid repeat type specified\n");
-				return (1);
-			}
-			break;
-		case 's':
-			start_seek = atoi(optarg);
-			break;
-		case 'c':
-			redirect_channel = atoi(optarg);
-			break;
-		case 'n':
-			no_pgmchange = 1;
-			break;
-		case 'T':
-			if ( set_tempo_percentage(atoi(optarg)) != 1 ) {
-				fprintf(stderr,
-					"Tempo percentage must be >= 1\n");
-				return 1;
-			}
-			break;
-		case 'v':
-			verbosity = atoi(optarg);
-			if (verbosity < 0) {
-				verbosity = 0;
-			} else if (verbosity > VERBOSE_MAX) {
-				verbosity = VERBOSE_MAX;
-			}
-			break;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	if (do_list) {
-		list_ports();
-	} else {
-		if (port_count < 1) {
-			/* use env var for compatibility with pmidi */
-			const char *ports_str = getenv("ALSA_OUTPUT_PORTS");
-			if (ports_str)
-				parse_ports(ports_str);
-			if (port_count < 1) {
-				errormsg("Please specify at least one port with --port.");
-				return 1;
-			}
-		}
-		if (optind >= argc) {
-			errormsg("Please specify a file to play.");
-			return 1;
-		}
-
-		/* make terminal unbuffered and non-blocking: */
-		tio = malloc(sizeof(struct termios));
-		unblock_stdin();
-		unbuffer_stdin();
-
-		create_source_port();
-		create_queue();
-		connect_ports();
-
-		file_count = argc - optind;
-		if (file_index < 0) {
-			switch (repeat_type) {
-			case REPEAT_NONE:
-			case REPEAT_CURRENT:
-			case REPEAT_ALL:
-				file_index = 0;
-				break;
-			case REPEAT_SHUFFLE:
-				file_index = rand_under(file_count);
-				break;
-			}
-		}
-		while (file_index < file_count) {
-			file_name = argv[optind + file_index];
-			play_file();
-
-			switch (repeat_type) {
-			case REPEAT_NONE:
-				file_index += file_index_increment == 0
-					    ? 1 : file_index_increment;
-				if (file_index < 0)
-					file_index = 0;
-				break;
-			case REPEAT_CURRENT:
-				file_index += file_index_increment;
-				if (file_index < 0)
-					file_index = 0;
-				break;
-			case REPEAT_ALL:
-				file_index += file_index_increment == 0
-					    ? 1 : file_index_increment;
-				if (file_index < 0 || file_index >= file_count)
-					file_index = 0;
-				break;
-			case REPEAT_SHUFFLE:
-				if (file_count > 1) {
-					/* Choose a _different_ random file. */
-					long r = rand_under(file_count - 1);
-					file_index = r < file_index ? r : r + 1;
-				}
-				break;
-			}
-			file_index_increment = 0;
-		}
-		quit(0);
-	}
-
-	snd_seq_close(seq);
-	return 0;
 }

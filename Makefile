@@ -1,27 +1,18 @@
-LDLIBS := -lasound
-CFLAGS ?= -g -O2
-CFLAGS += -W -Wall
-DESTDIR ?= /usr/local
-bindir ?= /bin
-mandir ?= /share/man
+CC=gcc
+ALSA_OPTS=`pkg-config --libs --cflags alsa`
+CFLAGS=-g3 -c ${ALSA_OPTS}
 
-all: midit
+all: src/libmidit.a listports
 
-midit: midit.c
+src/libmidit.a: src/midit.o
+	ar rc src/libmidit.a src/*.o
+	ranlib src/libmidit.a
+
+src/midit.o: src/midit.c
+	$(CC) $(CFLAGS) src/midit.c -o src/midit.o
+
+listports: src/libmidit.a
+	$(CC) -g3 src/listports.c -o bin/listports -L./src -lmidit ${ALSA_OPTS}
 
 clean:
-	rm -f midit
-
-install: all midit.1
-	mkdir -p $(DESTDIR)$(bindir)
-	mkdir -p $(DESTDIR)$(mandir)/1
-	cp midit $(DESTDIR)$(bindir)/
-	chmod 755 $(DESTDIR)$(bindir)/midit
-	cp midit.1 $(DESTDIR)$(mandir)/man1/
-	chmod 744 $(DESTDIR)$(mandir)/man1/midit.1
-
-uninstall:
-	rm -f $(DESTDIR)$(bindir)/midit
-	rm -f $(DESTDIR)$(mandir)/man1/midit.1
-
-.PHONY: all clean install uninstall
+	rm src/libmidit.a src/*.o bin/*
