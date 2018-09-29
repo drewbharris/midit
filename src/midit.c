@@ -183,6 +183,13 @@ static void quit(int q)
 	exit(q);
 }
 
+static void cleanup()
+{
+	snd_seq_event_t ev;
+	snd_seq_ev_set_queue_stop(&ev, queue);
+	snd_seq_close(seq);
+}
+
 /* prints an error message to stderr, and dies */
 static void fatal(const char *msg, ...)
 {
@@ -1412,6 +1419,8 @@ static void play_file(void)
 
 void list_ports(void)
 {
+	init_seq();
+
 	snd_seq_client_info_t *cinfo;
 	snd_seq_port_info_t *pinfo;
 
@@ -1443,6 +1452,8 @@ void list_ports(void)
 			       snd_seq_port_info_get_name(pinfo));
 		}
 	}
+
+	cleanup();
 }
 
 void sigio_handler(int signal_number)
