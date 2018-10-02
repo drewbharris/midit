@@ -11,7 +11,9 @@ typedef struct {
     midit_port_t *ports;
 } midit_port_list_t;
 
-void list_ports(void);
-
 midit_port_list_t* midit_getports();
 void midit_destroyports(midit_port_list_t *);
+void midit_openport(char *arg);
+void midit_closeport();
+void midit_playfile(char *file);
+void midit_stop();

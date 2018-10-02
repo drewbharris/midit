@@ -114,7 +114,7 @@ static int             delta_time;
 static struct termios *tio;
 static int             num_channels;
 static int             max_tick;
-static int             verbosity;
+static int             verbosity               = 4;
 static int             start_seek;
 static long long       time_from_start; /* in seconds */
 static long long       max_time;        /* in seconds */
@@ -1251,7 +1251,7 @@ static void play_midi(void)
                 goto skip;
             /* FORWARD ~10000 ticks */
             case 'F':
-                /* if playback has just started: */
+                 // if playback has just started: 
                 if (!event)
                     break;
                 /* else: */
@@ -1340,6 +1340,7 @@ static void play_midi(void)
         }
     }
 
+
     /* schedule queue stop at end of song */
     snd_seq_ev_set_fixed(&ev);
     ev.type = SND_SEQ_EVENT_STOP;
@@ -1413,10 +1414,9 @@ static void play_file(void)
     if (ok)
         play_midi();
 
-    cleanup_file_data();
     /* If there are several files, only the first file will be
      * concerned by the --seek (-s)  parameter: */
-    start_seek = 0;
+    // start_seek = 0;
 }
 
 midit_port_list_t* midit_getports(void)
@@ -1485,6 +1485,37 @@ void midit_destroyports(midit_port_list_t *portlist)
     }
     free(portlist->ports);
     free(portlist);
+}
+
+// open port by string
+void midit_openport(char *arg)
+{
+    init_seq();
+
+    parse_ports(arg);
+    create_source_port();
+    create_queue();
+    connect_ports();
+}
+
+// close the post and cleanup
+void midit_closeport()
+{
+    cleanup();
+}
+
+// play a file. requires port to be open
+void midit_playfile(char *file)
+{
+    file_name = file;
+    play_file();
+}
+
+// stop the playback, cleanup file data but leave the port open
+void midit_stop()
+{
+
+    cleanup_file_data();
 }
 
 void sigio_handler(int signal_number)
