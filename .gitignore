@@ -1,1 +1,3 @@
 midit
+src/*.a
+src/*.o
