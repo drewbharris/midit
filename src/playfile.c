@@ -3,25 +3,22 @@
 
 #include "midit.h"
 
-int main() {
-	midit_openport("14:0");
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        printf("usage: %s client:port filename\n", argv[0]);
+        return -1;
+    }
 
-	printf("playing\n");
-	midit_playfile("test.mid");
-	printf("thread running");
+    midit_openport(argv[1]);
 
-	usleep(1000 * 1000 * 10);
-	printf("stopping\n");
-	midit_stop();
-	usleep(1000 * 1000 * 5);
+    printf("playing %s on %s\n", argv[2], argv[1]);
+    midit_playfile(argv[2]);
 
-	midit_playfile("test.mid");
-	printf("thread running");
+    while (1) {
+        usleep(1000);
+        // todo: check if still playing
+    }
 
-	usleep(1000 * 1000 * 10);
-	printf("stopping\n");
-	midit_stop();
-
-	midit_closeport();
+    midit_closeport();
     return 0;
 }
