@@ -1,9 +1,10 @@
 /*
- * midit (formerly aplaymidi as part of alsa-utils)
- *  - play Standard MIDI Files to sequencer port(s)
+ * libmidit (formerly midit) (formerly aplaymidi as part of alsa-utils)
+ *  - a library to play Standard MIDI Files to sequencer port(s)
  *
  * Copyright (c) 2004-2006 Clemens Ladisch <clemens@ladisch.de>
- * Copyright (c) 2009-2016 mwnx <mwnx@gmx.com>
+ * Copyright (c) 2009-2018 mwnx <mwnx@gmx.com>
+ * Copyright (c) 2018-2018 drewbharris <drewbharris@gmail.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,8 +21,6 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
-/* TODO: sequencer queue timer selection ??? */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -35,17 +34,11 @@
 #include <pthread.h>
 #include "midit.h"
 
-#ifndef VERSION
-#define VERSION "no_version"
-#endif
-
 #define VERBOSE_MAX 4
 
 static int send_channel_mode(int param, int value);
 
 #define ALL_QUIET send_channel_mode(120, 0) /* all_sound_off */
-/* Alternatively, ALL_QUIET could be defined as: */
-// #define ALL_QUIET send_channel_mode(123, 0)  /* all_notes_off */
 
 /*
  * 31.25 kbaud, one start bit, eight data bits, two stop bits.
@@ -128,62 +121,12 @@ static char            no_pgmchange            = 0;
 static int             stopping                = 0;
 static pthread_mutex_t mutex1                  = PTHREAD_MUTEX_INITIALIZER;
 
-
-int verbprintf(int required_verbosity , char* s, ...)
-{
-    int ret = 1;
-    va_list args;
-    va_start (args, s);
-    if (verbosity >= required_verbosity)
-        vprintf(s, args);
-    else ret = 0;
-    va_end(args);
-    return ret;
-}
-
-void unbuffer_stdin()
-{
-    struct termios new_tio;
-
-    /* get the terminal settings for stdin */
-    tcgetattr(STDIN_FILENO,tio);
-
-    /* we want to keep the old setting to restore them a the end */
-    new_tio=*tio;
-
-    /* disable canonical mode (buffered i/o) and local echo */
-    new_tio.c_lflag &=(~ICANON & ~ECHO);
-
-    /* set the new settings immediately */
-    tcsetattr(STDIN_FILENO,TCSANOW,&new_tio);
-}
-
-void rebuffer_stdin()
-{
-    /* restore the former settings */
-    tcsetattr(STDIN_FILENO,TCSANOW,tio);
-}
-
-void unblock_stdin()
-{
-    fcntl(0, F_SETFL, O_NONBLOCK);
-}
-
-void block_stdin()
-{
-    fcntl(0, F_SETFL, O_ASYNC);
-}
-
 static void quit(int q)
 {
     snd_seq_event_t ev;
     snd_seq_ev_set_queue_stop(&ev, queue);
     ALL_QUIET;
     snd_seq_close(seq);
-
-    /* Put terminal back to normal: */
-    rebuffer_stdin();
-    block_stdin();
 
     exit(q);
 }
@@ -1181,14 +1124,6 @@ static void play_midi(void)
         // printf("sleeping for %d\n", sleep_time);
         usleep(sleep_time);
 
-        make_event_from(event, &ev);
-
-        /* XXX THERE MUST BE A BETTER WAY: */
-        err = snd_seq_event_output(seq, &ev);
-        check_snd("output event", err);
-        err = snd_seq_drain_output(seq);
-        check_snd("output event", err);
-
         if (stopping) {
             printf("play_file: got stop\n");
             ALL_QUIET;
@@ -1202,195 +1137,16 @@ static void play_midi(void)
             break;
         }
 
-        // ch = getc(stdin);
-        // if (ch != EOF) {
-        //     switch (ch) {
-        //     /* PAUSE: */
-        //     case ' ':
-        //         if (verbosity >= 3)
-        //             printf("\nPAUSE\n");
-        //         if (verbosity == 2)
-        //             printf("\033[20CPAUSE");
-        //         block_stdin();
-        //         ALL_QUIET;
-        //         getc(stdin);
-        //         unblock_stdin();
-        //         if (verbosity == 2)
-        //             printf("\033[1K\033[25D");
-        //         snd_seq_event_t ev_direct;
-        //         memset(&ev_direct, 0, sizeof(snd_seq_event_t));
-        //         snd_seq_ev_set_queue_pos_tick(&ev_direct, queue, old_ev_tick);
-        //         snd_seq_event_output_direct(seq, &ev_direct);
-        //         break;
-        //     /* TEMPO +: */
-        //     case '>':
-        //         if (!(set_tempo_percentage(tempo_percentage + 1))) {
-        //             if (verbosity >= 1)
-        //                 printf("can't set tempo percentage (too high)\n");
-        //         }
-        //         else if ( original_tempo > 0 ) {
-        //             err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
-        //             check_snd("output event", err);
-        //         }
-        //         goto tempo_change;
-        //     /* TEMPO =: */
-        //     case '=':
-        //         if (!(set_tempo_percentage(100))) {
-        //             if (verbosity >= 1)
-        //                 printf("can't set tempo percentage\n");
-        //         }
-        //         else if (original_tempo > 0) {
-        //             err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
-        //             check_snd("output event", err);
-        //         }
-        //         goto tempo_change;
-        //     /* TEMPO -: */
-        //     case '<':
-        //         if (!(set_tempo_percentage(tempo_percentage - 1))) {
-        //             if (verbosity >= 1)
-        //                 printf("can't set tempo percentage (too low)\n");
-        //         }
-        //         else if (original_tempo > 0) {
-        //             err = set_tempo_direct(original_tempo * (100.0 / (float)tempo_percentage));
-        //             check_snd("output event", err);
-        //         }
-        //     tempo_change:
-        //         max_time = time_of_tick(longest_track->end_tick);
-        //         max_time_m = max_time / 60000000;
-        //         max_time_s = (max_time / 1000000) % 60;
-        //         time_passed = time_of_tick(old_ev_tick);
-        //         break;
-        //     /* FORWARD ~1000 ticks */
-        //     case 'f':
-        //         /* if playback has just started: */
-        //         if ( !event )
-        //             break;
-        //         /* else: */
-        //         old_ev_tick = midi_seek(1000, event->tick);
-        //         goto skip;
-        //     /* FORWARD ~10000 ticks */
-        //     case 'F':
-        //          // if playback has just started: 
-        //         if (!event)
-        //             break;
-        //         /* else: */
-        //         old_ev_tick = midi_seek(10000, event->tick);
-        //         goto skip;
-        //     /* BEGINNING */
-        //     case 'B':
-        //         if (!event)
-        //             break;
-        //         old_ev_tick = midi_seek(start_seek, 0);
-        //         goto skip;
-        //     /* PREVIOUS FILE */
-        //     case 'P':
-        //         file_index_increment = -1;
-        //         goto change_file;
-        //     /* NEXT FILE */
-        //     case 'N':
-        //         file_index_increment = 1;
-        //     change_file:
-        //         if (!event)
-        //             break;
-        //         old_ev_tick = midi_seek(max_tick, event->tick);
-        //         goto skip;
-        //     /* REWIND ~1000 ticks: */
-        //     case 'r':
-        //         old_ev_tick = midi_seek(-1000, event->tick);
-        //         goto skip;
-        //     /* REWIND ~10000 ticks: */
-        //     case 'R':
-        //         old_ev_tick = midi_seek(-10000, event->tick);
-        //     skip:
-        //         ALL_QUIET;
-        //         time_passed = time_of_tick(old_ev_tick);
-        //         break;
-        //     /* REPEAT: NONE */
-        //     case ')':
-        //         repeat_type = REPEAT_NONE;
-        //         if (verbosity >= 3)
-        //             printf("repeat: none\n");
-        //         break;
-        //     /* REPEAT: CURRENT */
-        //     case '!':
-        //         repeat_type = REPEAT_CURRENT;
-        //         if (verbosity >= 3)
-        //             printf("repeat: current\n");
-        //         break;
-        //     /* REPEAT: ALL */
-        //     case '*':
-        //         repeat_type = REPEAT_ALL;
-        //         if (verbosity >= 3)
-        //             printf("repeat: all\n");
-        //         break;
-        //     /* REPEAT: SHUFFLE */
-        //     case '#':
-        //         repeat_type = REPEAT_SHUFFLE;
-        //         if (verbosity >= 3)
-        //             printf("repeat: shuffle\n");
-        //         break;
-        //     /* HELP: */
-        //     case 'h':
-        //         break;
-        //     /* QUIT: */
-        //     case 'q':
-        //         quit(0);
-        //         break;
-        //     /* VERBOSITY -: */
-        //     case 'v':
-        //         if (verbosity > 0)
-        //             verbosity--;
-        //         if (verbosity >= 0)
-        //             printf("verbosity : %d\n", verbosity);
-        //         break;
-        //     /* VERBOSITY +: */
-        //     case 'V':
-        //         if (verbosity < VERBOSE_MAX)
-        //             verbosity++;
-        //         if (verbosity >= 1)
-        //             printf("verbosity : %d\n", verbosity);
-        //         break;
-        //     default:
-        //         if (verbosity >= 1)
-        //             printf("unrecognized command: '%c'\n",
-        //                    ch);
-        //         break;
-        //     }
-        // }
+        make_event_from(event, &ev);
+
+        /* XXX THERE MUST BE A BETTER WAY: */
+        err = snd_seq_event_output(seq, &ev);
+        check_snd("output event", err);
+        err = snd_seq_drain_output(seq);
+        check_snd("output event", err);
     }
 
     printf("exited loop\n");
-
-    /* schedule queue stop at end of song */
-    // snd_seq_ev_set_fixed(&ev);
-    // ev.type = SND_SEQ_EVENT_STOP;
-    // ev.time.tick = max_tick;
-    // ev.dest.client = SND_SEQ_CLIENT_SYSTEM;
-    // ev.dest.port = SND_SEQ_PORT_SYSTEM_TIMER;
-    // ev.data.queue.queue = queue;
-    // err = snd_seq_event_output(seq, &ev);
-    // check_snd("output event", err);
-
-    /* make sure that the sequencer sees all our events */
-    // err = snd_seq_drain_output(seq);
-    // check_snd("drain output", err);
-
-    /*
-     * There are three possibilities how to wait until all events have
-     * been played:
-     * 1) send an event back to us (like pmidi does), and wait for it;
-     * 2) wait for the EVENT_STOP notification for our queue which is sent
-     *    by the system timer port (this would require a subscription);
-     * 3) wait until the output pool is empty.
-     * The last is the simplest.
-     */
-    // err = snd_seq_sync_output_queue(seq);
-    // check_snd("sync output", err);
-
-    /* give the last notes time to die away */
-    // if (end_delay > 0)
-    //     sleep(end_delay);
-
 }
 
 static void play_file(void)
@@ -1441,6 +1197,14 @@ static void play_file(void)
     cleanup_file_data();
 }
 
+// pthread function to call play_file
+static void *pthread_playfile(void *pntr) {
+    play_file();
+    return NULL;
+}
+
+// returns an array of midit_port_list_t.
+// memory is allocated and must be freed via midit_destroyports
 midit_port_list_t* midit_getports(void)
 {
     init_seq();
@@ -1498,6 +1262,7 @@ midit_port_list_t* midit_getports(void)
     return results_list;
 }
 
+// free memory allocated for a port list
 void midit_destroyports(midit_port_list_t *portlist)
 {
     int i;
@@ -1524,11 +1289,6 @@ void midit_openport(char *arg)
 void midit_closeport()
 {
     cleanup();
-}
-
-void *pthread_playfile(void *pntr) {
-    play_file();
-    return NULL;
 }
 
 // play a file. requires port to be open
